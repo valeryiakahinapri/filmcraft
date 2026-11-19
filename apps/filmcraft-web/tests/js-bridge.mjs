@@ -92,6 +92,17 @@ assert.ok(exported.path);
 const png = bridge.readFile(exported.path);
 assert.deepEqual(Array.from(png.subarray(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10], "export bytes are readable");
 
+const h264Exported = await bridge.exportMedia({
+  format: "h264",
+  path: "bridge-e2e.mp4",
+  range: "custom",
+  startSeconds: 0,
+  endSeconds: 0.1,
+  audio: false,
+});
+const mp4 = bridge.readFile(h264Exported.path);
+assert.equal(Buffer.from(mp4.subarray(4, 8)).toString(), "ftyp", "WASM H.264 export produces an MP4");
+
 const wav = Buffer.alloc(44 + 480 * 2);
 wav.write("RIFF", 0);
 wav.writeUInt32LE(wav.length - 8, 4);

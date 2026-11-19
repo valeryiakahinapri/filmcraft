@@ -20,6 +20,12 @@ cargo xtask web --dev           # unoptimised build (faster to compile, slow to 
 cargo xtask web --serve 8765    # build, then serve dist on http://127.0.0.1:8765/
 ```
 
+The release build uses Rust's optimized profile (opt-level 3, thin LTO, one codegen unit). When
+Binaryen's `wasm-opt` is installed, `cargo xtask web` applies its `-O2` pass to the bound WASM as
+well. For the current codec set this reduces the app from about 53 MiB to 42 MiB; higher `-O3`
+post-optimization was not faster in a local H.264 export comparison. Browsers remain single-threaded
+in this build, so software exports cannot use the native encoder thread pool.
+
 `--serve` is a tiny localhost-only static server that sends `Cross-Origin-Opener-Policy` /
 `Cross-Origin-Embedder-Policy`, so the page is cross-origin isolated like a production deployment
 should be. Any static server works (`python3 -m http.server -d target/web/dist 8765`); it must
@@ -61,6 +67,8 @@ wasm threads need a cross-origin isolated page **and** a wasm build with atomics
 `build-std` toolchain), so this build is single-threaded everywhere: frame rendering, decoding,
 mixing and encoding are cooperative on the UI thread, and `rayon` runs inline.
 `filmcraft.info()` reports `crossOriginIsolated` so a threaded build can choose at start-up.
+The H.264 encoder's native Rayon pool is enabled only on native targets; WASM H.264 export runs
+inline instead of trying to create an unsupported one-thread pool.
 Commands that need a thread on the desktop (render previews, proxies, Project Manager, mask
 tracking) report an error on the web for now.
 
