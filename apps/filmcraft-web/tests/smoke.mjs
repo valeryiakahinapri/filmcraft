@@ -119,6 +119,20 @@ try {
   if (report.load.error) throw new Error(report.load.error);
   report.resources = await js("performance.getEntriesByType('resource').filter(e => /wasm|\\.js/.test(e.name)).map(e => ({name: e.name.split('/').pop(), kB: Math.round(e.transferSize / 1024), ms: Math.round(e.duration)}))");
   report.info = await js("filmcraft.info()");
+  report.bridge = await js(`(() => {
+    const bridge = filmcraft.createBridge();
+    const project = bridge.inspect("project");
+    const result = {
+      project: project.name,
+      command: bridge.describe("file.newSequence").id,
+      commandCount: bridge.commands().length,
+    };
+    bridge.free();
+    return result;
+  })()`);
+  if (typeof report.bridge.project !== "string" || !report.bridge.project || report.bridge.command !== "file.newSequence" || report.bridge.commandCount < 1) {
+    throw new Error("headless JavaScript bridge did not initialize correctly: " + JSON.stringify(report.bridge));
+  }
   // let the UI settle (fonts, first frames)
   await sleep(1500);
   report.steps.demo = { screenshot: await shot("01-demo"), inspect: await js("filmcraft.inspect().then(i => ({window: i.window, activeSequence: i.activeSequence, fps: i.fps}))") };

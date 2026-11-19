@@ -2,8 +2,9 @@
 
 `apps/filmcraft-web` runs the same engine and egui UI as the desktop app in the browser: the
 workspace compiled to `wasm32-unknown-unknown`, started by eframe's web runner on WebGPU (WebGL2
-fallback). It is a static site: one `.wasm`, its `wasm-bindgen` JavaScript glue, `index.html`, an
-`AudioWorklet` script and an icon. Nothing is uploaded anywhere; media stay on the user's machine.
+fallback). The app is a static site: one `.wasm`, its `wasm-bindgen` JavaScript glue, `index.html`,
+an `AudioWorklet` script and an icon. Files stay on the user's machine unless the user explicitly
+uses the optional cloud-workspace API described below.
 
 ## Build and run
 
@@ -136,7 +137,111 @@ await filmcraft.request("ui.playback", {action: "play"});
 const {job} = await filmcraft.execute("file.exportMedia", {format: "h264", path: "/exports/out.mp4"});
 ```
 
+### Headless `FilmCraftBridge`
+
+`filmcraft.createBridge()` creates an independent engine session for scripts and hosts. It does
+not change the document open in the visible editor. Its `commands`, `describe`, `execute`, and
+JSON-Lines `run` methods use the same engine registry and parameter schemas as `filmcraft-cli`;
+all engine command IDs are available. It also provides CLI-equivalent project/sequence inspection,
+media probing (including explicitly supplied numbered image sequences), Program-frame rendering,
+import, save, export, and bounded decode benchmarking:
+
+```js
+const bridge = filmcraft.createBridge();
+const wavBytes = new Uint8Array(await file.arrayBuffer());
+const imported = await bridge.importFile(file.name, wavBytes);
+const item = imported.items[0];
+await bridge.execute("file.newSequence", {fromItem: item});
+await bridge.execute("timeline.place", {item, time: 0});
+const exported = await bridge.exportMedia({format: "wav", path: "review.wav"});
+const audio = bridge.readFile(exported.path); // Uint8Array
+```
+
+For several files, `importFiles([{name, bytes}, ...])` returns the CLI-style `{items, errors, paths}` result. Each import call accepts up to 1024 files and at most 512 MiB of bytes in total.
+
+`registerFile(name, bytes)` gives callers a bridge-scoped virtual path for other file-based engine
+commands; `files()` and `readFile(path)` only expose files belonging to that bridge. `saveProject`
+stores a `.fcproj` in that virtual filesystem. `renderFrame(seconds?, scale?)` returns
+`{width, height, rgba, offlineMedia}` with raw RGBA8 pixels; `probe(name, bytes)` returns common
+media info plus the same MXF, MPEG, Ogg and BWF details as the CLI. `probeImageSequence([{name,
+bytes}, ...])` probes a numbered sequence from explicitly supplied files (the first file selects
+the frame-number range). `benchmarkDecode(name, bytes, frames?)` benchmarks sequential video decode
+(120 frames by default, up to 10000) in batches that yield to the browser. Byte-array inputs are
+limited to 512 MiB. `exportMedia` waits for completion by default,
+like the CLI; callers who execute `file.exportMedia` with `wait: false` advance the returned job
+with `pumpJobs()` and inspect it with `jobs.list`.
+
+The browser cannot expose local path-based CLI behavior, implicit filesystem directory discovery,
+filesystem security flags, MCP stdio/TCP servers, or CLI stdout/stderr. These stay native CLI
+features; a host can instead drive the web app through its JavaScript API. Web export and rendering
+also run on the browser's main thread (with exports advanced in bounded steps); this bridge does
+not claim background or worker execution.
+
+The exported class can also be imported directly from `filmcraft_web.js` by hosts that instantiate
+the WASM module themselves:
+
+```js
+import init, {FilmCraftBridge} from "./filmcraft_web.js";
+await init();
+const bridge = new FilmCraftBridge();
+```
+
+### Optional cloud workspace PoC
+
+The local Rust service is a development proof of concept, not a production SaaS backend. It binds
+only to loopback, has no authentication or encryption, and stores uploaded originals and proxies in
+its data directory. Do not expose it to a network or use it for sensitive media.
+
+Start it in one terminal:
+
+```sh
+cargo run -p filmcraft-cloud -- --listen 127.0.0.1:8766 --data-dir ./filmcraft-cloud-data
+```
+
+In the browser, `filmcraft.cloudWorkspace` provides:
+
+| Call | |
+|---|---|
+| `configure(origin)` | set the HTTP(S) backend origin; defaults to `http://127.0.0.1:8766` |
+| `list()` | list assets and their current source/proxy content-hash versions |
+| `upload(file, options?)` | upload a source `File`, or a proxy with `{id, kind: "proxy", sourceEtag}` |
+| `cacheProxy(id)` | download the current proxy into OPFS, keyed by source and proxy versions |
+| `importAsset(id, options?)` | download/import the original into the visible editor; cache, attach and enable its current proxy when available |
+
+Example:
+
+```js
+const source = await filmcraft.cloudWorkspace.upload(masterFile);
+await filmcraft.cloudWorkspace.upload(proxyFile, {
+  id: source.id,
+  kind: "proxy",
+  sourceEtag: source.source.etag,
+});
+const imported = await filmcraft.cloudWorkspace.importAsset(source.id);
+```
+
+The backend computes SHA-256 ETags while streaming uploads, supports byte-range reads, and rejects a
+proxy upload if its `sourceEtag` does not match the current source. Replacing a source invalidates
+its proxy. The browser cache filename contains both current versions; on the next cache/import call,
+an outdated proxy is removed and fetched again. OPFS is subject to browser quota and eviction.
+The original is fetched as a browser `Blob` and FilmCraft reads it in chunks; the optional proxy is
+cached locally for playback. This PoC does not transcode proxies: upload a proxy created elsewhere
+or by a native FilmCraft workflow. The production replacement will need authenticated access,
+tenant/workspace isolation, quotas, HTTPS, and object storage.
+
 ## Browser test
+
+The Node bridge oracle compares command metadata, descriptions, and JSON-Lines results against
+`filmcraft-cli`, then tests rendering, media import/probe, export bytes, and project round-tripping
+through the actual WASM exports:
+
+```sh
+cargo build --locked -p filmcraft-cli
+cargo build --locked --target wasm32-unknown-unknown -p filmcraft-web
+mkdir -p target/web/node
+wasm-bindgen --target nodejs --out-dir target/web/node target/wasm32-unknown-unknown/debug/filmcraft_web.wasm
+node apps/filmcraft-web/tests/js-bridge.mjs
+```
 
 `apps/filmcraft-web/tests/smoke.mjs` drives headless Chrome over the DevTools protocol (Node ≥ 22,
 no npm packages): load, demo playback, import of a generated MP4, playback, H.264 export

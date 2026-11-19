@@ -20,6 +20,8 @@
 
 pub mod api;
 pub mod audio;
+pub mod bridge;
+pub mod cloud;
 pub mod download_pacing;
 pub mod fs;
 pub mod host;

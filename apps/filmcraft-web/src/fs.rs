@@ -104,6 +104,25 @@ pub fn put(path: &str, data: Vec<u8>) {
     FS.with(|fs| fs.borrow_mut().entries.insert(path.to_string(), Entry::Mem(data.into())));
 }
 
+/// Remove a host-owned virtual subtree and any cached Blob data below it.
+pub fn remove_prefix(prefix: &str) {
+    FS.with(|fs| {
+        let mut fs = fs.borrow_mut();
+        let paths: Vec<String> = fs.entries.keys().filter(|path| path.starts_with(prefix)).cloned().collect();
+        for path in paths {
+            if let Some(Entry::Blob { id, .. }) = fs.entries.remove(&path) {
+                fs.blobs.remove(&id);
+                fs.chunks.retain(|(blob_id, _), _| *blob_id != id);
+                fs.failed.retain(|(blob_id, _), _| *blob_id != id);
+                fs.inflight.retain(|(blob_id, _)| *blob_id != id);
+            } else {
+                fs.entries.remove(&path);
+            }
+        }
+        fs.recount();
+    });
+}
+
 /// The in-memory bytes written at `path` (saved projects and exports are held here; host mode
 /// hands them to the host at the next frame instead of downloading them). Blob entries — opened
 /// media — are never written, only registered, so a written path is always in memory.
@@ -484,6 +503,23 @@ pub fn download(name: &str, data: &[u8]) -> Result<(), wasm_bindgen::JsValue> {
 #[cfg(test)]
 mod exclusive_write_tests {
     use super::*;
+
+    #[test]
+    fn removing_virtual_subtree_does_not_remove_sibling_prefixes() {
+        let owned = "/bridge/17/file";
+        let sibling = "/bridge/170/file";
+        FS.with(|fs| {
+            let mut fs = fs.borrow_mut();
+            fs.entries.insert(owned.into(), Entry::Mem(Arc::from(&b"owned"[..])));
+            fs.entries.insert(sibling.into(), Entry::Mem(Arc::from(&b"sibling"[..])));
+        });
+        remove_prefix("/bridge/17/");
+        assert!(mem_bytes(owned).is_none());
+        assert_eq!(&*mem_bytes(sibling).unwrap_or_default(), b"sibling");
+        FS.with(|fs| {
+            fs.borrow_mut().entries.remove(sibling);
+        });
+    }
 
     #[test]
     fn virtual_file_creation_is_exclusive_and_opfs_fails_closed() {

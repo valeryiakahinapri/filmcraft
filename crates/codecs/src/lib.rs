@@ -32,6 +32,7 @@ pub mod mp4;
 pub mod mpeg;
 pub mod mxf;
 pub mod ogg;
+pub mod probe;
 mod stream_color;
 pub mod video;
 mod webm_alpha;
@@ -48,6 +49,7 @@ pub use mp4::Mp4Source;
 pub use mpeg::MpegSource;
 pub use mxf::MxfSource;
 pub use ogg::OggSource;
+pub use probe::probe_bytes;
 pub use video::{DecodedFrame, VideoDecoder, VideoDecoderFactory};
 pub use y4m::Y4mSource;
 

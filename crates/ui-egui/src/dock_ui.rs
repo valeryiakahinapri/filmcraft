@@ -461,7 +461,7 @@ fn dock_style(ui: &egui::Ui, t: &Tokens) -> DockStyle {
     style.close_group_label = "Close Panel Group".into();
     style.tab_height = t.tab_h;
     style.gap = t.gap;
-    style.background = t.panel_bg;
+    style.background = t.app_bg;
     style.tab_background = t.tab_bg;
     style.active_background = t.panel_bg;
     style.floating_background = t.panel_bg;
@@ -495,13 +495,16 @@ impl DockContent<PanelKind> for FilmContent<'_> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PanelKind) {
         let t = self.tokens;
         let frame = ui.max_rect();
-        let rect = frame;
-        self.bodies.push((*panel, rect, ui.layer_id()));
+        let inset = 4.0_f32.min(frame.width().min(frame.height()) * 0.5).max(0.0);
+        let rect = frame.shrink(inset);
+        let radius = t.radius.min(frame.width().min(frame.height()) * 0.5).max(0.0);
+        ui.painter().rect_filled(frame, radius, t.panel_bg);
+        self.bodies.push((*panel, frame, ui.layer_id()));
         // A panel in its own OS window draws in that window's coordinates: its automation
         // elements carry the window so they are not matched against main-window points.
         let viewport = ui.ctx().viewport_id();
         self.app.auto.viewport = viewport;
-        self.app.auto.add(&format!("panel.{}", panel.id()), rect, panel.title());
+        self.app.auto.add(&format!("panel.{}", panel.id()), frame, panel.title());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt(("panel", panel.id())));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         panels::show(self.app, &mut child, *panel, rect);
@@ -515,7 +518,7 @@ impl DockContent<PanelKind> for FilmContent<'_> {
         ui.allocate_rect(ui.max_rect(), Sense::hover());
         // Painted after the body so child backgrounds cannot hide the focus outline (#1075).
         if self.app.ui.focused == *panel {
-            ui.painter().rect_stroke(frame, 0.0, Stroke::new(1.0, t.focus), StrokeKind::Inside);
+            ui.painter().rect_stroke(frame, radius, Stroke::new(1.0, t.focus), StrokeKind::Inside);
         }
     }
 

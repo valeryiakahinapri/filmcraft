@@ -123,8 +123,12 @@ pub fn keep_media(path: &str, file: &web_sys::File) {
 /// Register the media kept in OPFS under their `/files/` paths; returns how many.
 pub async fn restore_media() -> usize {
     let files = opfs::files_in("media").await;
-    let n = files.len();
+    let proxies = opfs::files_in("cloud-proxies").await;
+    let n = files.len().saturating_add(proxies.len());
     for (name, f) in files {
+        crate::fs::register_blob(&name, f.into());
+    }
+    for (name, f) in proxies {
         crate::fs::register_blob(&name, f.into());
     }
     n

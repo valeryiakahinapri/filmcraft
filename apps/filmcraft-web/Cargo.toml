@@ -30,6 +30,7 @@ filmcraft-format = { workspace = true }
 filmcraft-time = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 wasm-bindgen = "=0.2.129"
@@ -49,6 +50,7 @@ web-sys = { version = "0.3", features = [
     "Blob",
     "BlobPropertyBag",
     "CssStyleDeclaration",
+    "Crypto",
     "CustomEvent",
     "CustomEventInit",
     "DataTransfer",
@@ -66,6 +68,7 @@ web-sys = { version = "0.3", features = [
     "FileSystemHandle",
     "FileSystemHandleKind",
     "FileSystemWritableFileStream",
+    "Headers",
     "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",
@@ -79,6 +82,7 @@ web-sys = { version = "0.3", features = [
     "OffscreenCanvasRenderingContext2d",
     "Performance",
     "Response",
+    "RequestInit",
     "StorageManager",
     "Url",
     "UrlSearchParams",

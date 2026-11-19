@@ -13,6 +13,7 @@
 //! await filmcraft.importUrl("/clip.mp4")                   // fetch + import (tests)
 //! await filmcraft.importFiles(input.files)                 // File / FileList / File[]
 //! await filmcraft.openProject(file)                        // .fcproj File or URL
+//! const bridge = filmcraft.createBridge()                   // independent headless JS session
 //! filmcraft.files(); await filmcraft.readFile("/exports/a.mp4"); filmcraft.info()
 //! ```
 //!
@@ -125,6 +126,12 @@ pub fn install() -> Result<(), JsValue> {
     Rc::new(PageApi::new("filmcraft", methods, request)).install()?;
     let window = web_sys::window().ok_or("no window")?;
     let obj: js_sys::Object = js_sys::Reflect::get(&window, &"filmcraft".into())?.unchecked_into();
+    crate::cloud::install(&obj)?;
+    set_fn(
+        &obj,
+        "createBridge",
+        Closure::<dyn Fn() -> Result<crate::bridge::FilmCraftBridge, JsValue>>::new(crate::bridge::FilmCraftBridge::new).into_js_value(),
+    )?;
     set_fn(
         &obj,
         "inspect",
