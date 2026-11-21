@@ -8,6 +8,7 @@ static site in `filmcraft-web-<version>/`:
 | `index.html` | The page. It loads everything through relative URLs. |
 | `filmcraft_web.js` | wasm-bindgen glue (generated, ES module) |
 | `filmcraft_web_bg.wasm` | The app, 39,126,617 bytes (39.13 MB) in the current optimized build, or 14,516,260 bytes (14.52 MB) with gzip |
+| `filmcraft_web_bg.wasm.br` | The same WASM precompressed at Brotli quality 11 (lgwin 24): 9,314,350 bytes. Emitted by `package.sh` when the `brotli` CLI is available, and committed separately under `packaging/web/filmcraft-web-0.20.1/` |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.

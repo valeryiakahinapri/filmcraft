@@ -1151,7 +1151,9 @@ mod tests {
         assert!(preset.resolve([1600.0, 900.0]).is_err());
 
         let mut preset = LayoutPreset::capture(&ui, [1600.0, 900.0]).unwrap();
-        preset.ui.maximized = Some(PanelKind::Info);
+        // LumetriColor is not docked in the default Editing workspace (Info is), so a maximized
+        // entry for it must be rejected by the docked-maximized rule.
+        preset.ui.maximized = Some(PanelKind::LumetriColor);
         assert!(preset.resolve([1600.0, 900.0]).is_err());
     }
 

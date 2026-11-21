@@ -50,46 +50,37 @@ Priorities and constraints stated by the user:
 
 ## Current published state
 
-The current branch is `copilot/wasm-export-performance`; `HEAD` and its remote both point to
-`a67eb08ec9efe7734e1fda2c4080abbd79da4623`. It contains:
+The branch is `copilot/wasm-export-performance`, rebased onto `storytold/filmcraft` `main`
+(including upstream's slip-monitor and frame-request-view changes) and pushed to
+`valeryiakahinapri/filmcraft`. It carries, in order: the earlier bridge/cloud/UI work; the WASM
+encoder thread-pool exclusion (native keeps it via target-specific features); the WASM
+workflow/handoff docs; the cumulative UI/layout/menu/scrub/theme changes; the committed
+Brotli q11 precompressed artifact; and a round of review fixes over everything above (bridge
+operation serialization and path sandboxing, stepped-export `offlineMedia` recording, cloud
+server upload bounds, xtask layer registration for `filmcraft-cloud`, layout-capture staleness,
+and test coverage for limits/concurrency). Run `git log --oneline upstream/main..HEAD` for the
+current list; hashes in older notes are stale by design.
 
-- `acb24658` (`wasm build`), which carries the earlier bridge/cloud/UI work.
-- `4e088d9f` (`WASM: fix browser H.264 export`), which excludes the unsupported encoder thread-pool
-  feature on WASM while keeping it for native builds, adds an H.264 export regression test, updates
-  web size notes, and includes the optimized static bundle at
-  [`packaging/web/filmcraft-web-0.20.1.zip`](../packaging/web/filmcraft-web-0.20.1.zip).
+The optimized bundle is committed at
+[`packaging/web/filmcraft-web-0.20.1.zip`](../packaging/web/filmcraft-web-0.20.1.zip) (inner WASM
+39,126,617 bytes, 14,516,260 gzip) and the precompressed serving artifact at
+[`packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](../packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br)
+(9,314,350 bytes; the smallest measured HTTP transfer, served with `Content-Encoding: br`).
+**Known gap:** the zip was built before the `ui.layout.*` / `filmcraft.exportLayout()` feature
+landed; rebuild with `cargo xtask web` + `packaging/web/package.sh` if a served bundle must
+include it, then refresh the sizes/SHA-256s in the packaging README and `docs/web.md`.
 
-The branch was pushed; no pull request was opened and `main` was not changed. The rounded browser
-UI, hamburger menu, WebGPU-only feature selection, font trimming, and scrub-performance changes
-remain uncommitted worktree changes, including an optimized ZIP rebuilt from the
-source that has not been committed/pushed. Its current SHA-256 is
-`2950dee0ad945ecc7e3bd060c27b00f2925fe86e8889c67f58e907d3753f298e`; the final WASM is 39,126,617
-bytes (14,516,260 gzip). The visible-editor layout JSON export/apply API and its documentation/tests
-are also uncommitted; the release bundle has not been rebuilt with this latest layout feature.
-
-The release pipeline applies Binaryen `-O2` after wasm-bindgen when available. The latest size
-reduction combines WebGPU-only dependencies and omission of optional Noto Serif in the browser;
-it is not a per-module profile. A short local Node H.264 comparison measured warm O2 samples at
-about 477 ms and O3 at about 485 ms; this is workload-specific, not a general benchmark. Browser
-scrubbing is throttled and downscaled in code, but has not been profiled in a real browser. See
-[web build docs](../docs/web.md) for current build and API details.
-
-The base shell has no Rust commands, but this session installed an isolated Rust 1.100.0 toolchain
-with the WASM target under `/tmp/filmcraft-*`. Those paths will not survive a fresh sandbox. For
-the latest layout changes, formatting, all 369 UI tests (one ignored), native UI clippy, web-target
-`cargo check`, and the layout control-channel round-trip test passed. The browser release build and
-browser smoke test were not rerun after those changes. Earlier, the optimized WASM rebuild and
-release JS bridge E2E passed. WASM clippy is blocked only by `clippy::drop_non_drop` on the
-unchanged `crates/engine/src/proxies.rs:554`; do not conflate it with this UI change. The worktree
-ZIP was verified against the prior rebuilt output, not the latest layout implementation.
-The first test attempt exhausted the `/workspaces` volume; tests were rerun using
-`/tmp/filmcraft-target`, and the generated `target/debug/incremental` cache was removed to restore
-space.
-
-The local static preview currently serves the rebuilt app at `http://127.0.0.1:8765/`; it serves
-only the web files, not a cloud backend, and its `/tmp` build output and process are ephemeral.
-The branch worktree is still uncommitted. Do not publish a commit until the full project quality
-gate is green.
+The release pipeline applies Binaryen `-O2` after wasm-bindgen when available. The size reduction
+combines WebGPU-only dependencies and omission of optional Noto Serif in the browser; it is not a
+per-module profile. A short local Node H.264 comparison measured warm O2 samples at about 477 ms
+and O3 at about 485 ms; this is workload-specific, not a general benchmark. Browser scrubbing is
+throttled and downscaled in code (Timeline scrub drags; see docs/web.md for the monitor-scrub-bar
+scope note) but has not been profiled in a real browser. See
+[web build docs](../docs/web.md) for current build and API details, and
+[HANDOFF.md](HANDOFF.md) for the quality-gate record and the open items (browser smoke rerun,
+pre-existing `proxies.rs:554` wasm clippy finding, and the upstream `craft-fcproj-format` rev
+divergence). Toolchains, `target/` output, and any running preview servers are ephemeral across
+sandboxes; artifacts are in git.
 
 ## References
 

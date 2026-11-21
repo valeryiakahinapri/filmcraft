@@ -152,15 +152,28 @@ async fn list_assets() -> Result<Vec<Asset>, JsValue> {
 /// Validate one manifest entry against the same shapes the server enforces.
 fn validate_asset(asset: &Asset) -> Result<(), JsValue> {
     validate_id(&asset.id)?;
-    if !valid_etag(&asset.source.etag) || asset.source.size > MAX_ASSET_BYTES {
+    if !valid_asset_name(&asset.source.name) || !valid_etag(&asset.source.etag) || asset.source.size > MAX_ASSET_BYTES {
         return Err(js_error("cloud asset list contains invalid source metadata"));
     }
     if let Some(proxy) = &asset.proxy {
-        if !valid_etag(&proxy.etag) || proxy.size > MAX_ASSET_BYTES || proxy.source_etag.as_deref().is_some_and(|etag| !valid_etag(etag)) {
+        if !valid_asset_name(&proxy.name)
+            || !valid_etag(&proxy.etag)
+            || proxy.size > MAX_ASSET_BYTES
+            || proxy.source_etag.as_deref().is_some_and(|etag| !valid_etag(etag))
+        {
             return Err(js_error("cloud asset list contains invalid proxy metadata"));
         }
     }
     Ok(())
+}
+
+/// The server's `safe_asset_name` shape: 1-255 characters, no separators or control characters.
+fn valid_asset_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.chars().any(|character| character == '/' || character == '\\' || character.is_control())
 }
 
 /// `sha256-<64 ascii hex>`, like the server's manifest validation.
@@ -269,9 +282,12 @@ async fn blob_from_response(response: web_sys::Response, expected_etag: &str) ->
 
 async fn response_value(response: web_sys::Response) -> Result<Value, JsValue> {
     check_response(&response).await?;
-    if let Some(length) = response.headers().get("content-length")?.and_then(|value| value.parse::<u64>().ok())
-        && length > MAX_MANIFEST_BYTES as u64
-    {
+    // A missing Content-Length (chunked) response would buffer before the size check could run;
+    // the loopback PoC server always states the length, so refuse what does not.
+    let Some(length) = response.headers().get("content-length")?.and_then(|value| value.parse::<u64>().ok()) else {
+        return Err(js_error("cloud response is missing its Content-Length"));
+    };
+    if length > MAX_MANIFEST_BYTES as u64 {
         return Err(js_error("cloud response exceeds the 16 MiB manifest limit"));
     }
     let text = JsFuture::from(response.text()?).await?.as_string().ok_or_else(|| js_error("cloud response was not text"))?;

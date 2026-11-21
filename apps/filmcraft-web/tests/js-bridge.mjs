@@ -139,6 +139,7 @@ await assert.rejects(
   "file commands are sandboxed to this bridge's virtual filesystem",
 );
 await assert.rejects(bridge.execute("file.import", { paths: ["/files/outside.mp4"] }), /outside this bridge/);
+await assert.rejects(bridge.execute("file.saveCopy", { path: "/files/outside.fcproj" }), /outside this bridge/, "the sandbox covers every path-taking command");
 await assert.rejects(
   bridge.importFiles(new Array(1025).fill({ name: "a.wav", bytes: mediaBytes })),
   /limited to 1024 files/,

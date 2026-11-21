@@ -493,24 +493,42 @@ impl FilmCraftBridge {
     /// this bridge's prefix, so one bridge cannot reach another bridge's or the visible app's
     /// files.
     fn check_command_paths(&self, id: &str, params: &Value) -> Result<(), JsValue> {
+        // Every engine command that reads or writes through the virtual filesystem — opens,
+        // saves, copies, imports (incl. AAF), exports (media, interchange, EDL/FCP XML/OTIO,
+        // AAF/OMF), marker CSV, and proxy attachment — is sandboxed to this bridge's prefix, so
+        // one bridge cannot reach another bridge's or the visible app's files.
+        const PATH_COMMANDS: &[&str] = &[
+            "file.open",
+            "file.save",
+            "file.saveAs",
+            "file.saveCopy",
+            "file.import",
+            "file.importAaf",
+            "file.exportMedia",
+            "file.exportInterchange",
+            "file.exportEdl",
+            "file.exportFcp7Xml",
+            "file.exportFcpxml",
+            "file.exportOtio",
+            "file.exportAaf",
+            "file.exportOmf",
+            "markers.exportCsv",
+            "media.attachProxies",
+        ];
+        if !PATH_COMMANDS.contains(&id) {
+            return Ok(());
+        }
         let prefix = format!("{}/", self.prefix);
         let check = |path: &str| {
             if path.starts_with(&prefix) { Ok(()) } else { Err(js_error("path is outside this bridge's virtual filesystem")) }
         };
-        match id {
-            "file.open" | "file.saveAs" | "file.exportMedia" => {
-                if let Some(path) = params.get("path").and_then(Value::as_str) {
-                    check(path)?;
-                }
+        if let Some(path) = params.get("path").and_then(Value::as_str) {
+            check(path)?;
+        }
+        if let Some(paths) = params.get("paths").and_then(Value::as_array) {
+            for path in paths.iter().filter_map(Value::as_str) {
+                check(path)?;
             }
-            "file.import" => {
-                if let Some(paths) = params.get("paths").and_then(Value::as_array) {
-                    for path in paths.iter().filter_map(Value::as_str) {
-                        check(path)?;
-                    }
-                }
-            }
-            _ => {}
         }
         Ok(())
     }

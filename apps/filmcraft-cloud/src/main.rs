@@ -34,6 +34,11 @@ const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Concurrent uploads; each holds a socket and up to 8 GiB of temp disk.
 const MAX_CONCURRENT_UPLOADS: usize = 4;
+/// Orphan sweep: upload temps must be this old before the startup sweep removes them.
+const SWEEP_UPLOAD_AGE: Duration = Duration::from_secs(3600);
+/// Orphan sweep: unreferenced variant data files must be this old (the rename-before-manifest
+/// window of a live upload is seconds).
+const SWEEP_DATA_AGE: Duration = Duration::from_secs(600);
 const MANIFEST: &str = "assets.json";
 const MANIFEST_TMP: &str = "assets.json.tmp";
 const MANIFEST_BACKUP: &str = "assets.json.bak";
@@ -179,8 +184,11 @@ impl AppState {
         // Reject the knowable failures (workspace full, unknown asset, stale source version)
         // before streaming so a doomed request never writes gigabytes to temp disk first.
         self.check_admissible(&id, kind, source_etag.as_deref()).await?;
-        // Each upload holds a socket and a temp file for its duration; cap how many run at once.
-        let upload_permit = self.uploads.acquire().await.map_err(ApiError::internal)?;
+        // Each upload holds a socket and a temp file for its duration; cap how many run at once
+        // and refuse (rather than queue) when saturated, so a slow client cannot wedge the rest.
+        let Ok(upload_permit) = self.uploads.try_acquire() else {
+            return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "too many concurrent uploads; retry when one finishes"));
+        };
         let temp_path = upload_temp_path(&self.root);
         let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&temp_path).await.map_err(ApiError::internal)?;
         let mut hasher = Sha256::new();
@@ -527,8 +535,9 @@ async fn remove_file_if_present(path: &Path, description: &str) {
 }
 
 /// Remove files a crashed run left behind: leftover upload temps and data files the manifest no
-/// longer references. Called once at startup, when no upload can be in flight, so disk from
-/// interrupted uploads does not accumulate silently.
+/// longer references. Called once at startup, when no upload of this process can be in flight.
+/// Age thresholds keep a second instance sharing the data directory (unsupported, but possible)
+/// from deleting the other process's fresh in-flight files; old garbage is still collected.
 async fn sweep_orphans(root: &Path, assets: &BTreeMap<String, AssetRecord>) {
     let mut referenced = std::collections::HashSet::new();
     for (id, asset) in assets {
@@ -540,16 +549,26 @@ async fn sweep_orphans(root: &Path, assets: &BTreeMap<String, AssetRecord>) {
     let Ok(mut entries) = tokio::fs::read_dir(root).await else {
         return;
     };
+    let now = std::time::SystemTime::now();
     let mut removed = 0usize;
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name().to_string_lossy().into_owned();
         let stale_upload = name.starts_with(".upload-") && name.ends_with(".tmp");
         let unreferenced = name.ends_with(".data") && !referenced.contains(&name);
-        let description = if stale_upload { "orphaned upload temp" } else { "unreferenced data file" };
-        if stale_upload || unreferenced {
-            remove_file_if_present(&entry.path(), description).await;
-            removed += 1;
+        if !(stale_upload || unreferenced) {
+            continue;
         }
+        // Only files old enough that no live upload plausibly owns them (a committed variant is
+        // renamed before the manifest is written, so a brief unreferenced window is normal).
+        let minimum_age = if stale_upload { SWEEP_UPLOAD_AGE } else { SWEEP_DATA_AGE };
+        let Ok(metadata) = entry.metadata().await else { continue };
+        let Ok(age) = now.duration_since(metadata.modified().unwrap_or(now)) else { continue };
+        if age < minimum_age {
+            continue;
+        }
+        let description = if stale_upload { "orphaned upload temp" } else { "unreferenced data file" };
+        remove_file_if_present(&entry.path(), description).await;
+        removed += 1;
     }
     if removed > 0 {
         eprintln!("filmcraft-cloud: removed {removed} orphaned file(s) left by an interrupted run");
