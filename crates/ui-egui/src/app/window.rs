@@ -49,11 +49,11 @@ impl FilmcraftApp {
 
     /// Replace the saved workspaces and write them to the data directory.
     pub fn set_workspaces(&mut self, w: dock::WorkspacePrefs) -> Result<(), String> {
-        self.workspaces = w;
-        match self.workspaces_path() {
-            Some(p) => self.workspaces.save(&p).map_err(|e| format!("saving workspaces: {e}")),
-            None => Ok(()),
+        if let Some(path) = self.workspaces_path() {
+            w.save(&path).map_err(|e| format!("saving workspaces: {e}"))?;
         }
+        self.workspaces = w;
+        Ok(())
     }
 
     pub fn set_workspace(&mut self, name: &str) {

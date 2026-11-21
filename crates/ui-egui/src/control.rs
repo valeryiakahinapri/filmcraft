@@ -7,6 +7,7 @@
 //! - `engine.execute {command, params}` / `ui.menu.invoke {id}`: run any engine or UI command
 //! - `engine.commands`: list engine commands; `ui.menu.list`: menu tree with enablement
 //! - `ui.inspect`: UI state + every registered widget (`elements`: id, label, rect)
+//! - `ui.layout.export` / `ui.layout.apply {layout, workspace?, save?}`: portable layout presets
 //! - `ui.elements {prefix?}`: registered widgets (optionally filtered by id prefix)
 //! - `ui.set {tool?, workspace?, mode?, theme?, focused?, playbackRes?, timeline?:{pps,scroll}}`
 //! - `ui.panel.show {panel}` / `ui.panel.close {panel}`
@@ -46,7 +47,7 @@ fn bounded_repetitions(params: &Value, key: &str, default: u64, minimum: u64, ma
 }
 
 use crate::FilmcraftApp;
-use crate::dock::PanelKind;
+use crate::dock::{self, LayoutPreset, MAX_LAYOUT_PRESET_BYTES, PanelKind};
 use crate::state::{Mode, PlaybackRes, ThumbnailMode, Tool};
 
 /// Prefix marking errors that may resolve after another frame.
@@ -483,6 +484,91 @@ fn handle_synthetic_input(app: &mut FilmcraftApp, p: &Value, method: &str) -> Ou
     }
 }
 
+fn layout_preset_value(value: &Value) -> Result<LayoutPreset, String> {
+    let preset = match value {
+        Value::String(text) => {
+            if text.len() > MAX_LAYOUT_PRESET_BYTES {
+                return Err(format!("layout JSON exceeds the {MAX_LAYOUT_PRESET_BYTES}-byte limit"));
+            }
+            serde_json::from_str::<LayoutPreset>(text).map_err(|error| format!("invalid layout JSON: {error}"))?
+        }
+        value => {
+            let size = serde_json::to_vec(value).map_err(|error| format!("could not read layout JSON: {error}"))?.len();
+            if size > MAX_LAYOUT_PRESET_BYTES {
+                return Err(format!("layout JSON exceeds the {MAX_LAYOUT_PRESET_BYTES}-byte limit"));
+            }
+            serde_json::from_value::<LayoutPreset>(value.clone()).map_err(|error| format!("invalid layout preset: {error}"))?
+        }
+    };
+    Ok(preset)
+}
+
+fn apply_layout_preset(app: &mut FilmcraftApp, ctx: &egui::Context, params: &Value) -> Result<Value, String> {
+    let object = params.as_object().ok_or("ui.layout.apply expects an object")?;
+    if object.keys().any(|key| !matches!(key.as_str(), "layout" | "workspace" | "save")) {
+        return Err("ui.layout.apply accepts only `layout`, `workspace` and `save`".into());
+    }
+    let preset = layout_preset_value(object.get("layout").ok_or("ui.layout.apply needs `layout`")?)?;
+    let target = match object.get("workspace") {
+        None => preset.workspace.clone(),
+        Some(Value::String(name)) => name.clone(),
+        Some(_) => return Err("`workspace` must be a workspace name".into()),
+    };
+    let target = dock::find(&app.workspaces, &target).ok_or_else(|| format!("unknown workspace `{target}`"))?;
+    let save = match object.get("save") {
+        None => false,
+        Some(Value::Bool(save)) => *save,
+        Some(_) => return Err("`save` must be a boolean".into()),
+    };
+    let size = ctx.content_rect().size();
+    let (layout, ui) = preset.resolve([size.x, size.y])?;
+    let mut next = app.workspaces.clone();
+    if save {
+        let entry = dock::SavedWorkspace::new(&target, &layout)?;
+        match next.saved.iter_mut().find(|saved| saved.name == target) {
+            Some(saved) => *saved = entry,
+            None => next.saved.push(entry),
+        }
+        if next.last.as_ref().is_some_and(|last| last.name == target) {
+            next.last = None;
+        }
+    } else {
+        next.last = Some(dock::SavedWorkspace::new(&target, &layout)?);
+    }
+    next.current = target.clone();
+    app.set_workspaces(next)?;
+    app.ui.workspace = target.clone();
+    app.ui.dock = layout;
+    app.ui.focused = ui.focused;
+    app.ui.closed_floating = ui.closed_floating.into_iter().map(|floating| (floating.panel, floating.rect)).collect();
+    app.ui.effect_controls_split = ui.effect_controls_split;
+    app.ui.expanded_fx = ui.expanded_effects;
+    app.ui.lumetri_grid_folder = ui.lumetri_grid_folder;
+    app.ui.collapsed_fx = ui.collapsed_effects;
+    app.ui.timeline.split = ui.timeline.split;
+    app.ui.timeline.video_track_h = ui.timeline.video_track_height;
+    app.ui.timeline.audio_track_h = ui.timeline.audio_track_height;
+    app.ui.timeline.header_w = ui.timeline.header_width;
+    app.ui.timeline.show_thumbnails = ui.timeline.show_thumbnails;
+    app.ui.timeline.thumbnail_mode = ui.timeline.thumbnail_mode;
+    app.ui.timeline.show_waveforms = ui.timeline.show_waveforms;
+    app.ui.timeline.show_video_names = ui.timeline.show_video_names;
+    app.ui.timeline.show_audio_names = ui.timeline.show_audio_names;
+    app.ui.timeline.follow = ui.timeline.follow;
+    app.ui.essential_sound_tab = ui.essential_sound_tab;
+    app.ui.text_tab = ui.text_tab;
+    app.ui.show_scopes = ui.show_scopes;
+    app.ui.show_menu_bar = ui.show_menu_bar;
+    app.ui.show_header = ui.show_header;
+    app.ui.show_status_bar = ui.show_status_bar;
+    app.ui.mixer_fx_open = ui.mixer_fx_open;
+    app.ui.keys.maximized = ui.maximized;
+    app.pending_panel_raise = None;
+    let panels = app.ui.dock.panels().len();
+    let floating = app.ui.dock.floating.len();
+    Ok(json!({"workspace": target, "saved": save, "panels": panels, "floating": floating}))
+}
+
 /// Execute one control request. Synthetic input is capped by `MAX_SYNTHETIC_EVENTS` before queueing, screenshot crops stay symbolic until capture, and
 /// `gfxEdit` layer identity is resolved from the document.
 pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
@@ -511,6 +597,17 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
         },
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items_with_focus(app, ctx)).unwrap_or_default()),
         "ui.inspect" => ok(inspect(app, ctx)),
+        "ui.layout.export" => {
+            let size = ctx.content_rect().size();
+            match LayoutPreset::capture(&app.ui, [size.x, size.y]).and_then(|preset| serde_json::to_value(preset).map_err(|error| error.to_string())) {
+                Ok(preset) => ok(preset),
+                Err(error) => err(error),
+            }
+        }
+        "ui.layout.apply" => match apply_layout_preset(app, ctx, p) {
+            Ok(result) => ok(result),
+            Err(error) => err(error),
+        },
         "ui.docking" => {
             let hits = craft_ui::docking::DockArea::<PanelKind>::hit_rects(ctx, crate::dock_ui::area_id());
             let hits: Vec<Value> = hits.iter().map(|(hit, r)| json!({"hit": hit, "rect": [r.left(), r.top(), r.width(), r.height()]})).collect();
@@ -856,6 +953,65 @@ mod input_bounds_tests {
         }
         // A rejected request must not prevent subsequent valid input.
         assert!(matches!(request(&mut app, "ui.click", json!({"x": 10, "y": 20})), Outcome::AfterInput));
+    }
+
+    #[test]
+    fn invalid_layout_preset_does_not_change_the_live_workspace() {
+        let mut app = app();
+        let original_layout = app.ui.dock.clone();
+        let original_workspace = app.workspaces.clone();
+        let mut preset = dock::LayoutPreset::capture(&app.ui, [1600.0, 900.0]).unwrap();
+        preset.version += 1;
+        let Outcome::Done(reply) = request(&mut app, "ui.layout.apply", json!({"layout": preset, "workspace": "Color", "save": true})) else {
+            panic!("invalid layout presets must be rejected immediately");
+        };
+        assert_eq!(reply["ok"], false);
+        assert!(reply["error"].as_str().unwrap().contains("unsupported layout version"));
+        assert_eq!(app.ui.dock, original_layout);
+        assert_eq!(app.workspaces, original_workspace);
+        assert_eq!(app.ui.workspace, "Editing");
+    }
+
+    #[test]
+    fn layout_control_round_trip_applies_panel_and_timeline_view_state() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0))), ..Default::default() };
+        let mut export = None;
+        let mut output = ctx.run_ui(input.clone(), |ui| {
+            export = Some(handle(&mut app, ui.ctx(), &ControlRequest::new("ui.layout.export", json!({})).0));
+        });
+        output.textures_delta.clear();
+        let Some(Outcome::Done(reply)) = export else { panic!("layout export must return a result") };
+        assert_eq!(reply["ok"], true);
+        let mut preset = reply["result"].clone();
+        preset["ui"]["timeline"]["videoTrackHeight"] = json!(88.0);
+        preset["ui"]["showScopes"] = json!(true);
+        let preset_json = preset.to_string();
+        let mut applied = None;
+        let mut output = ctx.run_ui(input.clone(), |ui| {
+            applied = Some(handle(&mut app, ui.ctx(), &ControlRequest::new("ui.layout.apply", json!({"layout": preset_json})).0));
+        });
+        output.textures_delta.clear();
+        let Some(Outcome::Done(reply)) = applied else { panic!("layout apply must return a result") };
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(app.ui.workspace, "Editing");
+        assert_eq!(app.ui.timeline.video_track_h, 88.0);
+        assert!(app.ui.show_scopes);
+        assert_eq!(app.workspaces.current, "Editing");
+
+        let preset = dock::LayoutPreset::capture(&app.ui, [1600.0, 900.0]).unwrap();
+        let mut applied = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            applied =
+                Some(handle(&mut app, ui.ctx(), &ControlRequest::new("ui.layout.apply", json!({"layout": preset, "workspace": "Color", "save": true})).0));
+        });
+        output.textures_delta.clear();
+        let Some(Outcome::Done(reply)) = applied else { panic!("saved layout apply must return a result") };
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(app.ui.workspace, "Color");
+        assert_eq!(app.workspaces.current, "Color");
+        assert!(app.workspaces.saved.iter().any(|saved| saved.name == "Color"));
     }
 
     /// Verify missing/null defaults, accepted click bounds, button pairs and modifier resets.

@@ -495,7 +495,7 @@ impl DockContent<PanelKind> for FilmContent<'_> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PanelKind) {
         let t = self.tokens;
         let frame = ui.max_rect();
-        let inset = 4.0_f32.min(frame.width().min(frame.height()) * 0.5).max(0.0);
+        let inset = t.gap.min(frame.width().min(frame.height()).max(0.0) * 0.25).max(0.0);
         let rect = frame.shrink(inset);
         let radius = t.radius.min(frame.width().min(frame.height()) * 0.5).max(0.0);
         ui.painter().rect_filled(frame, radius, t.panel_bg);

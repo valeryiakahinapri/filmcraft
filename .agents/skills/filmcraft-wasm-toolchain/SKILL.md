@@ -78,6 +78,19 @@ Use the shared engine command registry wherever possible, then audit CLI modes o
 See [bridge parity and browser capability boundaries](kb/bridge-parity.md) and the bridge section
 of `docs/web.md` for the current API contract.
 
+## Drive and serialize the visible editor
+
+- `filmcraft.createBridge()` is an independent headless engine session. UI actions and layout
+  snapshots must use the live page API (`window.filmcraft.request(...)` or its convenience
+  methods), which dispatches through the UI control channel.
+- For portable workspace layouts, wrap the existing docking model in a versioned JSON schema
+  rather than inventing a second panel-tree format. Preserve ratio versus fixed sizing, active
+  tabs, accordion/folded state and minimized groups; normalize viewport-relative floating-window
+  rectangles; omit native-window/monitor placement and project-specific Timeline zoom/scroll.
+- Parse and size-limit imported JSON, validate the entire layout before mutating UI state, and
+  apply/save it as one operation. Keep transient apply separate from saving a named workspace's
+  default, and document which panel-specific UI state the workspace file itself persists.
+
 ## Hosting and media storage
 
 The shipped web distribution is static; cloud storage is a separate optional backend. Follow

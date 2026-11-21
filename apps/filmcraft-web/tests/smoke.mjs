@@ -136,6 +136,42 @@ try {
   // let the UI settle (fonts, first frames)
   await sleep(1500);
   report.steps.demo = { screenshot: await shot("01-demo"), inspect: await js("filmcraft.inspect().then(i => ({window: i.window, activeSequence: i.activeSequence, fps: i.fps}))") };
+  report.steps.layout = await js(`(async () => {
+    const profile = await filmcraft.exportLayout();
+    const signature = value => JSON.stringify({
+      ...value,
+      layout: {
+        ...value.layout,
+        floating: value.layout.floating.map(({id, ...window}) => window),
+      },
+    });
+    const applied = await filmcraft.applyLayout(JSON.stringify(profile));
+    const afterApply = await filmcraft.exportLayout();
+    let invalidError = "";
+    try {
+      await filmcraft.applyLayout({...profile, version: profile.version + 1});
+    } catch (error) {
+      invalidError = error.message;
+    }
+    const afterInvalid = await filmcraft.exportLayout();
+    return {
+      schema: profile.schema,
+      version: profile.version,
+      workspace: profile.workspace,
+      applied,
+      roundTrip: signature(profile) === signature(afterApply),
+      invalidError,
+      invalidUnchanged: signature(afterApply) === signature(afterInvalid),
+    };
+  })()`);
+  if (
+    report.steps.layout.schema !== "filmcraft.ui-layout" ||
+    !report.steps.layout.roundTrip ||
+    !report.steps.layout.invalidError.includes("unsupported layout version") ||
+    !report.steps.layout.invalidUnchanged
+  ) {
+    throw new Error("layout bridge export/import did not round-trip safely: " + JSON.stringify(report.steps.layout));
+  }
 
   // play 2 seconds
   await js("filmcraft.request('ui.playback', {action: 'play'})");

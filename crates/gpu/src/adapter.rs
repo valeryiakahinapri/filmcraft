@@ -126,6 +126,7 @@ fn wgpu_choice(candidates: &[Candidate], power: PowerPreference) -> Option<usize
 /// There GL starts a WGL context thread inside the vendor driver (NVIDIA's `nvoglv64` is both its
 /// GL driver and its Vulkan ICD); instances created and devices dropped concurrently then deadlock
 /// in that driver (#3418). Elsewhere GL stays, for machines where it is the only working backend.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn native_instance() -> wgpu::Instance {
     wgpu::Instance::new(native_descriptor())
 }
@@ -135,6 +136,7 @@ pub(crate) fn native_instance() -> wgpu::Instance {
 /// lists a Vulkan driver that reports no conformance version, such as Mesa's Dozen (the only one on
 /// WSL2), and `WGPU_VALIDATION`, `WGPU_DX12_COMPILER` and the others work here too. The backends stay
 /// as above: `WGPU_BACKEND` narrows the adapters chosen from them instead (`ExportRenderer::new`).
+#[cfg(not(target_arch = "wasm32"))]
 fn native_descriptor() -> wgpu::InstanceDescriptor {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     desc.backends = if cfg!(windows) { wgpu::Backends::PRIMARY } else { wgpu::Backends::PRIMARY | wgpu::Backends::GL };

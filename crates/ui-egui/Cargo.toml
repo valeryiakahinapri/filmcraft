@@ -29,7 +29,7 @@ filmcraft-gpu = { workspace = true }
 filmcraft-scopes = { workspace = true }
 egui = { workspace = true }
 egui_extras = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard"] }
+eframe = { workspace = true, features = ["default_fonts", "clipboard"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -68,3 +68,8 @@ toml = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "accesskit"] }
+
+# eframe's `wgpu` feature includes the WebGL backend; the browser selects WebGPU explicitly.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { workspace = true, features = ["wgpu_no_default_features"] }

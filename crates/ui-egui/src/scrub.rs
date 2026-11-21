@@ -11,6 +11,7 @@
 //! starts the OS audio engine, which can take most of a second (0.5-1 s measured on WASAPI,
 //! #2633), and `cpal::Stream` is `!Send`. An implementation opens the stream on a thread that
 //! keeps owning it and returns at once, so a press or a drag never waits for the device.
+//! The browser disables scrub audio so its single UI thread can prioritize preview frames.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -88,6 +89,10 @@ impl FilmcraftApp {
     /// `FilmcraftApp::scrub_audio` with the clock and the button state given. Returns whether
     /// the scrub stream is still open.
     pub fn scrub_tick(&mut self, now: f64, down: bool) -> bool {
+        self.scrub_tick_with_audio(now, down, !cfg!(target_arch = "wasm32"))
+    }
+
+    fn scrub_tick_with_audio(&mut self, now: f64, down: bool, audio_allowed: bool) -> bool {
         let ph = self.session.playhead();
         let prev = self.scrub.last_tick.replace(ph);
         if self.playback.playing || self.source_playback.clock.playing {
@@ -102,7 +107,7 @@ impl FilmcraftApp {
             }
             return false;
         }
-        let on = self.session.prefs.audio.scrub_audio;
+        let on = audio_allowed && self.session.prefs.audio.scrub_audio;
         if on && down && prev.is_some_and(|p| p != ph) {
             self.scrub_grain(ph, now);
         }
@@ -315,6 +320,16 @@ mod tests {
         app.scrub_tick(0.0, true);
         app.session.set_playhead(rate.tick_of(60));
         assert!(!app.scrub_tick(0.02, true), "playback owns the device");
+    }
+
+    #[test]
+    fn browser_scrubbing_never_opens_audio_output() {
+        let (mut app, fill) = app(true);
+        let rate = app.session.sequence_rate();
+        app.scrub_tick_with_audio(0.0, true, false);
+        app.session.set_playhead(rate.tick_of(60));
+        assert!(!app.scrub_tick_with_audio(0.02, true, false));
+        assert!(fill.lock().unwrap().is_none());
     }
 
     /// Source monitor playback (added on main next to this feature) owns the device too: a scrub

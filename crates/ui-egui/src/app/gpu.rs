@@ -2,13 +2,13 @@ use super::{FilmcraftApp, FrameKey, GpuState, frames, gpu_compositor_unsupported
 
 impl FilmcraftApp {
     /// Enable the GPU compositor on the eframe wgpu device.
-    pub fn set_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) {
+    pub fn set_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) -> bool {
         if let Some(why) = gpu_compositor_unsupported(&rs.adapter) {
             log::warn!("GPU compositor disabled ({why}); compositing on the CPU");
             // Say so instead of letting the preview quietly crawl: "GPU 0 %, CPU 100 %" with no
             // explanation read like a renderer bug when the machine simply has no GPU access.
             self.ui.status = format!("{} ({why})", tl!("GPU acceleration is unavailable; preview renders on the CPU"));
-            return;
+            return false;
         }
         // wgpu's default reaction to a validation error or lost device is to panic, which closed
         // the app (or left the monitors blank) on GPUs the compositor doesn't suit. Log instead and
@@ -24,8 +24,12 @@ impl FilmcraftApp {
             Ok(compositor) if !broken.load(std::sync::atomic::Ordering::Relaxed) => {
                 let max_texture = rs.device.limits().max_texture_dimension_2d;
                 self.gpu = Some(GpuState { render_state: rs, compositor, texture: None, last_key: None, size: (0, 0), last_ms: 0.0, broken, max_texture });
+                true
             }
-            _ => log::error!("GPU compositor failed to initialise; compositing on the CPU"),
+            _ => {
+                log::error!("GPU compositor failed to initialise; compositing on the CPU");
+                false
+            }
         }
     }
 

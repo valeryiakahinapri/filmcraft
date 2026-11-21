@@ -7,7 +7,7 @@ static site in `filmcraft-web-<version>/`:
 |---|---|
 | `index.html` | The page. It loads everything through relative URLs. |
 | `filmcraft_web.js` | wasm-bindgen glue (generated, ES module) |
-| `filmcraft_web_bg.wasm` | The app, about 42 MiB in the current optimized build, or 17 MiB with gzip |
+| `filmcraft_web_bg.wasm` | The app, 39,126,617 bytes (39.13 MB) in the current optimized build, or 14,516,260 bytes (14.52 MB) with gzip |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
@@ -26,13 +26,14 @@ forever. Only `index.html` needs revalidation.
   any other type, and the app then loads slowly or not at all. Serve `.js` as `text/javascript`.
   Most hosts already do both. For nginx, check that `mime.types` has `application/wasm wasm;`.
 - **Compression:** turn on gzip or Brotli for `.wasm`, `.js` and `.html`. That takes the
-  current WASM download from about 42 MiB to about 17 MiB with gzip. You can also precompress
+  current WASM download from 39.13 MB to 14.52 MB with gzip. You can also precompress
   (`brotli -k *.wasm`) and let the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the `.wasm` and `.js`
   files (their URLs carry the build hash), and `no-cache` on `index.html`. `index.html` must not
   be cached, or a browser can pair an old page with new files.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
-  or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
+  or `http://localhost`. The app does not fall back to WebGL2 or CPU rendering when WebGPU is
+  unavailable.
 - **No special isolation headers:** FilmCraft doesn't use `SharedArrayBuffer`, so it doesn't
   need `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. If your site already sends
   COEP `require-corp`, also send `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`
@@ -87,7 +88,7 @@ downloading them. The two sides talk `postMessage` with plain window messages th
 | `filmcraft:open` | page → app | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array`): a `.fcproj` opens like File › Open, anything else imports like a file dropped on the page. Over 512 MiB or malformed: refused with a message in the app, nothing crashes |
 | `filmcraft:save` | app → page | `name`, `saveAs`, `bytes` (a transferred `ArrayBuffer`): every file the app would otherwise download — Save, Save As, Save a Copy, video / frame / audio exports, captions, interchange (AAF, OMF, EDL, markers), extracted audio, the schema backup. The page stores it and reports failures itself. `saveAs` says whether the file becomes the document's file — the project the next Save writes: `true` when the app adopts the file and the page didn't already have it as the document (Save As, and the first Save of a project the page never sent); `false` for a Save of the document under its own name and for every copy (Save a Copy, exports, the schema backup beside an upgraded project) |
 | `filmcraft:dirty` | app → page | `dirty`: unsaved changes appeared or went away |
-| `filmcraft:failed` | app → page | `error`: the app couldn't start (no WebGPU or WebGL2, for example) |
+| `filmcraft:failed` | app → page | `error`: the app couldn't start (WebGPU unavailable, for example) |
 
 In host mode the app opens no demo project and restores nothing from an earlier visit (no OPFS
 snapshot, no restored media), so the framing page should send the file to edit and guard leaving
@@ -167,17 +168,8 @@ The messages and both transports are the shared contract of [`craft-web-host`](h
 - **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MiB) and a larger file is refused, and a name is cut to 255 characters.
 - **The event and message names are the interface.** `filmcraft:ready`, `filmcraft:open`, `filmcraft:save`, `filmcraft:dirty` and `filmcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
 
-## Renderer selection and fallback flags
+## WebGPU requirement
 
-FilmCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
-**WebGL2** on its own. URL query flags override this, and they work on the iframe `src` too:
-
-| Flag | Effect |
-|---|---|
-| *(none)* | WebGPU if available, otherwise WebGL2 |
-| `?webgl` | Force the WebGL2 backend (useful when a WebGPU driver misbehaves). The page reloads with it by itself when WebGPU is present but fails to start |
-| `?cpu` | Force the CPU canvas path (slowest, most compatible) |
-
-For example: `<iframe src="https://example.com/filmcraft/?webgl" ...>`.
-
-A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+The browser build contains only the WebGPU backend; WebGL2 and the `?webgl`/`?cpu` renderer
+overrides are not shipped. Use a WebGPU-capable browser over HTTPS (or localhost). When WebGPU is
+unavailable, the page shows an actionable startup error instead of retrying another renderer.

@@ -5,7 +5,8 @@
 //! While playing we prefetch the next frames in priority order; while scrubbing the exact frame is
 //! requested first and the nearest cached frame is shown until it arrives (no black flashes), or
 //! failing that the frame asked for a refresh earlier, so the picture follows a scrub or a value
-//! that is dragged instead of waiting for the mouse to rest.
+//! that is dragged instead of waiting for the mouse to rest. The browser caps Timeline-scrub
+//! requests at 15 fps and half resolution, then requests the normal paused frame on release.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use filmcraft_project::ItemKind;
@@ -24,6 +25,85 @@ use crate::widgets::ZoomThumbPart;
 pub enum Which {
     Source,
     Program,
+}
+
+const WEB_SCRUB_PREVIEW_INTERVAL: f64 = 1.0 / 15.0;
+const WEB_SCRUB_PREVIEW_SCALE: f32 = 0.5;
+
+fn web_scrubbing(app: &FilmcraftApp, which: Which) -> bool {
+    cfg!(target_arch = "wasm32") && which == Which::Program && matches!(app.tl.drag.as_ref(), Some(crate::panels::timeline::Drag::Scrub { .. }))
+}
+
+fn request_frame_due(ctx: &egui::Context, which: Which, web_scrubbing: bool) -> bool {
+    which != Which::Program || scrub_preview_request_due(ctx, ctx.input(|i| i.time), web_scrubbing)
+}
+
+fn scrub_preview_scale(scale: f32, scrubbing: bool) -> f32 {
+    if scrubbing { scale.min(WEB_SCRUB_PREVIEW_SCALE) } else { scale }
+}
+
+fn scrub_preview_request_due(ctx: &egui::Context, now: f64, scrubbing: bool) -> bool {
+    let id = egui::Id::unique("web-scrub-preview-last-request");
+    if !scrubbing {
+        ctx.data_mut(|data| data.remove::<f64>(id));
+        return true;
+    }
+    if !now.is_finite() {
+        ctx.data_mut(|data| data.remove::<f64>(id));
+        return true;
+    }
+    ctx.data_mut(|data| {
+        let last = data.get_temp::<f64>(id);
+        if last.is_none_or(|last| !last.is_finite() || now < last || now - last >= WEB_SCRUB_PREVIEW_INTERVAL) {
+            data.insert_temp(id, now);
+            true
+        } else {
+            false
+        }
+    })
+}
+
+struct PreviewFrameRequest<'a> {
+    which: Which,
+    key: FrameKey,
+    rate: filmcraft_time::FrameRate,
+    scale: f32,
+    project: &'a std::sync::Arc<filmcraft_project::Project>,
+    speed: f64,
+    duration: Tick,
+    playing: bool,
+    request_frame: bool,
+}
+
+fn schedule_preview_frame(app: &mut FilmcraftApp, request: PreviewFrameRequest<'_>) {
+    let PreviewFrameRequest { which, key, rate, scale, project, speed, duration, playing, request_frame } = request;
+    if playing {
+        let preroll = which == Which::Program && app.playback.preroll.is_some();
+        app.frames.schedule_playback(key, rate, scale, project, speed, preroll);
+        if preroll {
+            app.playback.preroll_ready = app.frames.preroll_ready(key, app.playback.speed, rate.frame_at(duration) - 1);
+        }
+    } else if request_frame {
+        app.frames.request(key, rate.tick_of(key.frame), scale, project, 0);
+    }
+}
+
+#[cfg(test)]
+mod web_scrub_tests {
+    use super::*;
+
+    #[test]
+    fn browser_scrub_preview_is_half_resolution_at_fifteen_fps_and_resets_on_release() {
+        let ctx = egui::Context::default();
+        assert_eq!(scrub_preview_scale(1.0, true), 0.5);
+        assert_eq!(scrub_preview_scale(0.25, true), 0.25);
+        assert_eq!(scrub_preview_scale(1.0, false), 1.0);
+        assert!(scrub_preview_request_due(&ctx, 0.0, true));
+        assert!(!scrub_preview_request_due(&ctx, 0.05, true));
+        assert!(scrub_preview_request_due(&ctx, 0.067, true));
+        assert!(scrub_preview_request_due(&ctx, 0.07, false), "release requests full-quality frame immediately");
+        assert!(scrub_preview_request_due(&ctx, 0.071, true), "the next drag requests immediately");
+    }
 }
 
 /// What the monitor's picture block draws this frame.
@@ -58,9 +138,10 @@ fn draw_picture(app: &mut FilmcraftApp, ui: &mut egui::Ui, which: Which, mv: &cr
     }
     let playing = if which == Which::Program { app.playback.playing } else { app.source_playback.clock.playing };
     let res = mv.effective_res(playing);
+    let web_scrubbing = web_scrubbing(app, which);
     // frame pixels per screen pixel along the axis that needs the most of them
     let screen_scale = (pic.width() * ppp / frame_size.0.max(1) as f32).max(pic.height() * ppp / frame_size.1.max(1) as f32).min(1.0);
-    let scale = quantize_scale(res.scale().min(screen_scale.max(1.0 / 32.0)));
+    let scale = quantize_scale(scrub_preview_scale(res.scale().min(screen_scale.max(1.0 / 32.0)), web_scrubbing));
     let frame = rate.frame_at(time);
     let rev = match target {
         Target::Item(i) => app.item_revision(i),
@@ -86,15 +167,8 @@ fn draw_picture(app: &mut FilmcraftApp, ui: &mut egui::Ui, which: Which, mv: &cr
     let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
     // while playing, which way: frames on the other side of the playhead are not due yet
     let dir = playing.then(|| play_direction(speed));
-    if playing {
-        let preroll = which == Which::Program && app.playback.preroll.is_some();
-        app.frames.schedule_playback(key, rate, scale, &project, speed, preroll);
-        if preroll {
-            app.playback.preroll_ready = app.frames.preroll_ready(key, app.playback.speed, rate.frame_at(duration) - 1);
-        }
-    } else {
-        app.frames.request(key, rate.tick_of(frame), scale, &project, 0);
-    }
+    let request_frame = request_frame_due(&ctx, which, web_scrubbing);
+    schedule_preview_frame(app, PreviewFrameRequest { which, key, rate, scale, project: &project, speed, duration, playing, request_frame });
     let asked = asked_before(app, prefix, key, playing);
     let tex_name = if channel {
         format!("monitor-{prefix}-{display:?}")

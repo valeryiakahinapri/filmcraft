@@ -1,7 +1,7 @@
 //! The header bar (Premiere 26 layout, 38 pt): Home and Import / Edit / Export on the left, the
 //! document title centred, the workspace name and quick actions on the right. On macOS the menus
-//! live in the native menu bar (set up by the app); elsewhere a compact in-window menu bar follows
-//! the mode tabs.
+//! live in the native menu bar (set up by the app); the browser uses a hamburger menu beside the
+//! mode tabs, and other platforms keep the compact in-window menu bar.
 
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 
@@ -12,6 +12,11 @@ use crate::theme::Tokens;
 
 /// Height of the header bar. With `integrated_titlebar` it sits in the macOS title-bar strip.
 pub const HEIGHT: f32 = 38.0;
+
+fn menu_bounds(x: f32, header: Rect) -> Rect {
+    let (width, inset_y) = if cfg!(target_arch = "wasm32") { (36.0, 4.0) } else { (520.0, 7.0) };
+    Rect::from_min_max(pos2(x + 6.0, header.min.y + inset_y), pos2(x + width, header.max.y - inset_y))
+}
 
 /// Draws the header bar in `rect` and handles its clicks: Home, the mode tabs, the workspace name
 /// and its menu (the workspaces, then Reset to Saved Layout, Save Changes to this Workspace, Save as
@@ -63,8 +68,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mut left_end = x;
     // In-window menus when there is no native menu bar.
     if app.ui.show_menu_bar {
-        let menu_rect = Rect::from_min_max(pos2(x + 6.0, rect.min.y + 7.0), pos2(x + 520.0, rect.max.y - 7.0));
-        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(menu_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let bounds = menu_bounds(x, rect);
+        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(bounds).layout(egui::Layout::left_to_right(egui::Align::Center)));
         mu.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
         mu.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
         mu.style_mut().visuals.override_text_color = Some(t.text_dim);

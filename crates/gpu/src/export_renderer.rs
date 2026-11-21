@@ -11,10 +11,15 @@
 //! the CPU renderer; a `FramePlan::Image` plan (HDR / wide gamut / anything the plan sends to the
 //! CPU) is returned unchanged — it already is the CPU image.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::{GpuCompositor, prepare};
+#[cfg(not(target_arch = "wasm32"))]
 use filmcraft_project::{ItemId, Project};
+#[cfg(not(target_arch = "wasm32"))]
 use filmcraft_render::plan::{DeviceCaps, FramePlan, plan_frame};
+#[cfg(not(target_arch = "wasm32"))]
 use filmcraft_render::{Image, RenderOptions, SourceProvider};
+#[cfg(not(target_arch = "wasm32"))]
 use filmcraft_time::Tick;
 
 /// Where export rendering spends its time (process-wide totals, for the bench).
@@ -56,6 +61,7 @@ pub mod timing {
         add(&CONVERT_NS, d);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn add_frame() {
         FRAMES.fetch_add(1, Ordering::Relaxed);
     }
@@ -75,19 +81,24 @@ pub mod timing {
 /// Set once the shared export device reported an uncaptured error (validation, out of memory)
 /// or was lost: every export renders on the CPU from then on. The device is shared by every
 /// renderer and lives in a `OnceLock`, so it is not recreated in this process.
+// Browser WebGPU handles are !Send/!Sync, so the native process-wide export device is not built there.
+#[cfg(not(target_arch = "wasm32"))]
 static DEVICE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Retire the shared export device, logging the first reason only.
+#[cfg(not(target_arch = "wasm32"))]
 fn mark_device_failed(why: &str) {
     if !DEVICE_FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         log::error!("GPU export disabled for this session ({why}); exports render on the CPU");
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn device_failed() -> bool {
     DEVICE_FAILED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct ExportRenderer {
     _instance: wgpu::Instance,
     #[expect(dead_code, reason = "kept for future frame-accuracy flows (readback fences)")]
@@ -97,6 +108,7 @@ pub struct ExportRenderer {
     compositor: GpuCompositor,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ExportRenderer {
     /// The off-screen device, or `None` when this host has no usable adapter or this build no
     /// wgpu backend.
@@ -173,7 +185,7 @@ impl ExportRenderer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use crate::{f16_to_f32, f32_to_f16};

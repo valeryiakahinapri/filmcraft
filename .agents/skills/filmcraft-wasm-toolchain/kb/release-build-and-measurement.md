@@ -41,6 +41,21 @@ removing it. Then test all affected fallbacks and user-visible capabilities. Ren
 codecs, fonts, and UI functionality can be expensive but intentional; do not trade them away based
 only on symbol size. Report measured deltas, not speculative savings.
 
+For an explicitly WebGPU-only browser build, eframe's `wgpu` feature is too broad: it enables
+`egui-wgpu` defaults, including the WebGL backend. Use `wgpu_no_default_features` on each eframe
+dependency and add only the required `wgpu` features (`webgpu`, `wgsl`, `std`, and any actually
+needed synchronization support) under the WASM target. Verify the resolved graph with
+`cargo tree -p <web-crate> --target wasm32-unknown-unknown -e features -i wgpu --edges normal`;
+WebGPU should be present and `webgl` absent. This removes a GPU backend, not the engine's CPU
+renderer: trace callers before removing CPU rendering, since bridges, exports, display modes, or
+unsupported GPU operations may still depend on it. Keep native/headless feature selection separate.
+
+On the single-threaded web UI, frame rendering competes with pointer input. During an active scrub,
+cap preview requests and resolution, bound each cooperative pump pass, and restore the configured
+paused resolution immediately on release. Disable audio scrubbing if it mixes on that same UI
+thread. Unit tests can verify the policy and request interval, but only a real browser workload can
+establish actual input latency or perceived smoothness.
+
 ## Browser-specific failure modes
 
 A web build may compile while still failing at runtime because a native dependency tries to create

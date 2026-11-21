@@ -70,8 +70,10 @@
     const build = "__FC_BUILD__";
     const v = build.startsWith("__") ? "" : "?v=" + build;
     const t0 = performance.now();
-    const params = new URLSearchParams(location.search);
     try {
+      if (!navigator.gpu) {
+        throw new Error("FilmCraft requires WebGPU. Use a WebGPU-capable browser over HTTPS or localhost.");
+      }
       const { default: init, start } = await import("./filmcraft_web.js" + v);
       await init({ module_or_path: new URL("filmcraft_web_bg.wasm" + v, location.href) });
       window.filmcraftLoad.wasmMs = performance.now() - t0;
@@ -80,13 +82,12 @@
     } catch (e) {
       const text = String(e && e.stack || e);
       window.filmcraftLoad.error = String(e);
-      // WebGPU was found but could not be started: try again on WebGL2 (once)
-      if (!params.has("webgl") && !params.has("cpu") && /wgpu|webgpu|requestDevice|requestAdapter|GPUDevice|surface/i.test(text)) {
-        params.set("webgl", "");
-        location.replace(location.pathname + "?" + params.toString().replace(/=(&|$)/g, "$1") + location.hash);
-      } else {
-        const s = document.getElementById("status");
-        if (s) { s.className = "err"; s.textContent = "FilmCraft failed to start:\n" + text; }
+      const s = document.getElementById("status");
+      if (s) {
+        s.className = "err";
+        s.textContent = /wgpu|webgpu|requestDevice|requestAdapter|GPUDevice|surface/i.test(text)
+          ? "FilmCraft requires WebGPU in a secure context (HTTPS or localhost):\n" + text
+          : "FilmCraft failed to start:\n" + text;
       }
       throw e;
     }

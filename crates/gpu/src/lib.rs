@@ -44,6 +44,7 @@ pub mod fx;
 pub mod lut;
 pub mod mask;
 mod transition;
+#[cfg(not(target_arch = "wasm32"))]
 pub use export_renderer::ExportRenderer;
 pub use lut::GpuLut;
 pub use mask::GpuMask;

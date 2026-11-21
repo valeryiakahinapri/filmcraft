@@ -199,6 +199,236 @@ impl SavedWorkspace {
     }
 }
 
+pub const LAYOUT_PRESET_SCHEMA: &str = "filmcraft.ui-layout";
+pub const LAYOUT_PRESET_VERSION: u32 = 1;
+pub const MAX_LAYOUT_PRESET_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct LayoutPreset {
+    pub schema: String,
+    pub version: u32,
+    pub workspace: String,
+    pub viewport: [f32; 2],
+    pub layout: Layout,
+    pub ui: LayoutPresetUi,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct LayoutPresetUi {
+    pub focused: PanelKind,
+    #[serde(default)]
+    pub maximized: Option<PanelKind>,
+    pub closed_floating: Vec<ClosedFloatingPreset>,
+    pub effect_controls_split: f32,
+    pub expanded_effects: Vec<String>,
+    pub lumetri_grid_folder: Option<String>,
+    pub collapsed_effects: Vec<String>,
+    pub timeline: TimelineLayoutPreset,
+    pub essential_sound_tab: String,
+    pub text_tab: String,
+    pub show_scopes: bool,
+    pub show_menu_bar: bool,
+    pub show_header: bool,
+    pub show_status_bar: bool,
+    pub mixer_fx_open: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TimelineLayoutPreset {
+    pub split: f32,
+    pub video_track_height: f32,
+    pub audio_track_height: f32,
+    pub header_width: f32,
+    pub show_thumbnails: bool,
+    pub thumbnail_mode: crate::state::ThumbnailMode,
+    pub show_waveforms: bool,
+    pub show_video_names: bool,
+    pub show_audio_names: bool,
+    pub follow: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ClosedFloatingPreset {
+    pub panel: PanelKind,
+    pub rect: [f32; 4],
+}
+
+impl LayoutPreset {
+    pub fn capture(ui: &crate::state::UiState, viewport: [f32; 2]) -> Result<Self, String> {
+        validate_viewport(viewport, "current")?;
+        Workspace::new(ui.dock.clone()).validate().map_err(|e| format!("current dock layout is invalid: {e}"))?;
+
+        let mut layout = ui.dock.clone();
+        for window in &mut layout.floating {
+            window.rect = relative_rect(window.rect, viewport)?;
+            window.native = None;
+            window.monitor = None;
+            window.monitor_size = None;
+        }
+        let focused =
+            if layout.is_visible(ui.focused) { ui.focused } else { layout.visible_panels().first().copied().ok_or("current layout has no visible panel")? };
+        let closed_floating = ui
+            .closed_floating
+            .iter()
+            .map(|(panel, rect)| Ok(ClosedFloatingPreset { panel: *panel, rect: relative_rect(*rect, viewport)? }))
+            .collect::<Result<Vec<_>, String>>()?;
+        let preset = Self {
+            schema: LAYOUT_PRESET_SCHEMA.into(),
+            version: LAYOUT_PRESET_VERSION,
+            workspace: ui.workspace.clone(),
+            viewport,
+            layout,
+            ui: LayoutPresetUi {
+                focused,
+                maximized: ui.keys.maximized.filter(|panel| ui.dock.is_docked(*panel)),
+                closed_floating,
+                effect_controls_split: ui.effect_controls_split,
+                expanded_effects: ui.expanded_fx.clone(),
+                lumetri_grid_folder: ui.lumetri_grid_folder.clone(),
+                collapsed_effects: ui.collapsed_fx.clone(),
+                timeline: TimelineLayoutPreset {
+                    split: ui.timeline.split,
+                    video_track_height: ui.timeline.video_track_h,
+                    audio_track_height: ui.timeline.audio_track_h,
+                    header_width: ui.timeline.header_w,
+                    show_thumbnails: ui.timeline.show_thumbnails,
+                    thumbnail_mode: ui.timeline.thumbnail_mode,
+                    show_waveforms: ui.timeline.show_waveforms,
+                    show_video_names: ui.timeline.show_video_names,
+                    show_audio_names: ui.timeline.show_audio_names,
+                    follow: ui.timeline.follow,
+                },
+                essential_sound_tab: ui.essential_sound_tab.clone(),
+                text_tab: ui.text_tab.clone(),
+                show_scopes: ui.show_scopes,
+                show_menu_bar: ui.show_menu_bar,
+                show_header: ui.show_header,
+                show_status_bar: ui.show_status_bar,
+                mixer_fx_open: ui.mixer_fx_open,
+            },
+        };
+        preset.validate_fields()?;
+        preset.clone().resolve(viewport)?;
+        Ok(preset)
+    }
+
+    pub fn resolve(mut self, viewport: [f32; 2]) -> Result<(Layout, LayoutPresetUi), String> {
+        self.validate_fields()?;
+        validate_viewport(viewport, "target")?;
+        for window in &mut self.layout.floating {
+            let rect = absolute_rect(window.rect, viewport)?;
+            let mut fresh = Floating::new(window.root.clone(), rect);
+            fresh.minimized = window.minimized;
+            *window = fresh;
+        }
+        for floating in &mut self.ui.closed_floating {
+            floating.rect = absolute_rect(floating.rect, viewport)?;
+        }
+        Workspace::new(self.layout.clone()).validate().map_err(|e| format!("layout is invalid: {e}"))?;
+        if !self.layout.is_visible(self.ui.focused) {
+            return Err("focused panel must be visible in the layout".into());
+        }
+        if self.ui.maximized.is_some_and(|panel| !self.layout.is_docked(panel)) {
+            return Err("maximized panel must be docked in the layout".into());
+        }
+        let mut closed = std::collections::HashSet::new();
+        for floating in &self.ui.closed_floating {
+            if self.layout.contains(&floating.panel) || !closed.insert(floating.panel) {
+                return Err("closed floating panels must be unique and absent from the layout".into());
+            }
+            validate_rect(floating.rect, "closed floating panel")?;
+        }
+        Ok((self.layout, self.ui))
+    }
+
+    fn validate_fields(&self) -> Result<(), String> {
+        if self.schema != LAYOUT_PRESET_SCHEMA {
+            return Err(format!("unsupported layout schema `{}`", self.schema));
+        }
+        if self.version != LAYOUT_PRESET_VERSION {
+            return Err(format!("unsupported layout version {}", self.version));
+        }
+        validate_viewport(self.viewport, "saved")?;
+        if self.workspace.trim().is_empty() || self.workspace.len() > 256 {
+            return Err("layout workspace must be a non-empty name of at most 256 bytes".into());
+        }
+        if !self.ui.effect_controls_split.is_finite() || !(0.0..=4_096.0).contains(&self.ui.effect_controls_split) {
+            return Err("effectControlsSplit must be finite and between 0 and 4096 points".into());
+        }
+        let timeline = &self.ui.timeline;
+        if !timeline.split.is_finite() || !(0.1..=0.9).contains(&timeline.split) {
+            return Err("timeline split must be finite and between 0.1 and 0.9".into());
+        }
+        for (field, value) in [("videoTrackHeight", timeline.video_track_height), ("audioTrackHeight", timeline.audio_track_height)] {
+            if !value.is_finite() || !(22.0..=240.0).contains(&value) {
+                return Err(format!("timeline {field} must be finite and between 22 and 240 points"));
+            }
+        }
+        if !timeline.header_width.is_finite() || !(64.0..=2_048.0).contains(&timeline.header_width) {
+            return Err("timeline headerWidth must be finite and between 64 and 2048 points".into());
+        }
+        if !matches!(self.ui.essential_sound_tab.as_str(), "Browse" | "Edit") {
+            return Err("essentialSoundTab must be `Browse` or `Edit`".into());
+        }
+        if !matches!(self.ui.text_tab.as_str(), "Transcript" | "Captions" | "Graphics") {
+            return Err("textTab must be `Transcript`, `Captions` or `Graphics`".into());
+        }
+        for (field, values) in [("expandedEffects", &self.ui.expanded_effects), ("collapsedEffects", &self.ui.collapsed_effects)] {
+            if values.len() > 4096 || values.iter().any(|value| value.len() > 4096) {
+                return Err(format!("{field} contains too many or too-long entries"));
+            }
+        }
+        if self.ui.lumetri_grid_folder.as_ref().is_some_and(|value| value.len() > 4096) {
+            return Err("lumetriGridFolder is too long".into());
+        }
+        if self.ui.closed_floating.len() > PanelKind::ALL.len() {
+            return Err("too many closed floating panels".into());
+        }
+        Ok(())
+    }
+}
+
+fn validate_viewport(viewport: [f32; 2], label: &str) -> Result<(), String> {
+    if viewport.iter().all(|value| value.is_finite() && *value > 0.0 && *value <= 100_000.0) {
+        Ok(())
+    } else {
+        Err(format!("{label} viewport must have finite positive dimensions no larger than 100000 points"))
+    }
+}
+
+fn validate_rect(rect: [f32; 4], label: &str) -> Result<(), String> {
+    if rect.iter().all(|value| value.is_finite() && value.abs() <= 100_000.0) && rect[2] > 0.0 && rect[3] > 0.0 {
+        Ok(())
+    } else {
+        Err(format!("{label} rectangle must be finite and have positive dimensions"))
+    }
+}
+
+fn relative_rect(mut rect: [f32; 4], viewport: [f32; 2]) -> Result<[f32; 4], String> {
+    validate_rect(rect, "floating panel")?;
+    rect[0] /= viewport[0];
+    rect[1] /= viewport[1];
+    rect[2] /= viewport[0];
+    rect[3] /= viewport[1];
+    if rect.iter().all(|value| value.is_finite()) { Ok(rect) } else { Err("floating panel rectangle cannot be normalized".into()) }
+}
+
+fn absolute_rect(mut rect: [f32; 4], viewport: [f32; 2]) -> Result<[f32; 4], String> {
+    if !rect.iter().all(|value| value.is_finite()) || rect[2] <= 0.0 || rect[3] <= 0.0 {
+        return Err("floating panel rectangle must be finite and have positive dimensions".into());
+    }
+    rect[0] *= viewport[0];
+    rect[1] *= viewport[1];
+    rect[2] *= viewport[0];
+    rect[3] *= viewport[1];
+    validate_rect(rect, "floating panel")?;
+    Ok(rect)
+}
+
 impl WorkspacePrefs {
     pub fn load(path: &std::path::Path) -> Self {
         use std::io::Read as _;
@@ -844,6 +1074,80 @@ mod tests {
             assert!(d.contains(&PanelKind::Timeline), "{w}");
             assert!(d.contains(&PanelKind::Program), "{w}");
         }
+    }
+
+    #[test]
+    fn layout_preset_round_trip_preserves_folded_groups_and_scales_floating_panels() {
+        let mut ui = crate::state::UiState::default();
+        ui.workspace = "Editing".into();
+        ui.focused = PanelKind::Project;
+        ui.keys.maximized = Some(PanelKind::Timeline);
+        ui.effect_controls_split = 240.0;
+        ui.expanded_fx = vec!["Video Transitions".into()];
+        ui.collapsed_fx = vec!["clip:0".into()];
+        ui.timeline.split = 0.6;
+        ui.timeline.video_track_h = 72.0;
+        ui.timeline.header_w = 220.0;
+        ui.dock = Layout {
+            root: Some(Node::Split {
+                axis: SplitAxis::Horizontal,
+                size: SplitSize::Ratio(0.65),
+                first: Box::new(Node::Stack {
+                    entries: vec![
+                        craft_ui::docking::StackEntry { panel: PanelKind::Project, open: true, height: Some(280.0) },
+                        craft_ui::docking::StackEntry { panel: PanelKind::Effects, open: false, height: Some(160.0) },
+                    ],
+                }),
+                second: Box::new(Node::Tabs { panels: vec![PanelKind::Timeline], active: 0 }),
+            }),
+            floating: vec![{
+                let mut window = Floating::single(vec![PanelKind::Info], 0, [80.0, 120.0, 320.0, 180.0]);
+                window.minimized = true;
+                window.native = Some([10.0, 20.0, 300.0, 200.0]);
+                window.monitor_size = Some([1920.0, 1080.0]);
+                window
+            }],
+        };
+        ui.closed_floating = vec![(PanelKind::Metadata, [400.0, 100.0, 200.0, 300.0])];
+
+        let preset = LayoutPreset::capture(&ui, [800.0, 600.0]).unwrap();
+        assert_eq!(preset.schema, LAYOUT_PRESET_SCHEMA);
+        assert_eq!(preset.ui.maximized, Some(PanelKind::Timeline));
+        assert_eq!(preset.layout.floating[0].rect, [0.1, 0.2, 0.4, 0.3]);
+        assert_eq!(preset.ui.closed_floating[0].rect, [0.5, 100.0 / 600.0, 0.25, 0.5]);
+        assert_eq!(preset.layout.floating[0].native, None);
+        assert_eq!(preset.layout.floating[0].monitor_size, None);
+
+        let (layout, panel_ui) = preset.resolve([1600.0, 1200.0]).unwrap();
+        assert_eq!(layout.floating[0].rect, [160.0, 240.0, 640.0, 360.0]);
+        assert!(layout.floating[0].minimized);
+        assert_eq!(panel_ui.closed_floating[0].rect, [800.0, 200.0, 400.0, 600.0]);
+        assert_eq!(panel_ui.effect_controls_split, 240.0);
+        assert_eq!(panel_ui.maximized, Some(PanelKind::Timeline));
+        assert_eq!(panel_ui.expanded_effects, ["Video Transitions"]);
+        assert_eq!(panel_ui.collapsed_effects, ["clip:0"]);
+        assert_eq!(panel_ui.timeline.split, 0.6);
+        assert_eq!(panel_ui.timeline.video_track_height, 72.0);
+        assert_eq!(panel_ui.timeline.header_width, 220.0);
+        let Some(Node::Split { size, first, .. }) = layout.root else { panic!("root split") };
+        assert_eq!(size, SplitSize::Ratio(0.65));
+        assert!(matches!(*first, Node::Stack { ref entries } if entries.get(1).is_some_and(|entry| !entry.open)));
+    }
+
+    #[test]
+    fn layout_preset_rejects_unsupported_versions_and_invalid_geometry() {
+        let ui = crate::state::UiState::default();
+        let mut preset = LayoutPreset::capture(&ui, [1600.0, 900.0]).unwrap();
+        preset.version += 1;
+        assert!(preset.resolve([1600.0, 900.0]).is_err());
+
+        let mut preset = LayoutPreset::capture(&ui, [1600.0, 900.0]).unwrap();
+        preset.ui.effect_controls_split = f32::NAN;
+        assert!(preset.resolve([1600.0, 900.0]).is_err());
+
+        let mut preset = LayoutPreset::capture(&ui, [1600.0, 900.0]).unwrap();
+        preset.ui.maximized = Some(PanelKind::Info);
+        assert!(preset.resolve([1600.0, 900.0]).is_err());
     }
 
     /// The fixed sizes of a tree's splits, depth first.

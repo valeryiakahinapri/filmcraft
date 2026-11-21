@@ -48,6 +48,8 @@ Methods (handlers in `crates/ui-egui/src/control.rs`):
 |---|---|---|
 | `engine.execute` / `ui.menu.invoke` | `{command, params}` | any engine or UI command id |
 | `engine.commands` / `ui.menu.list` | – | command registry / menu tree |
+| `ui.layout.export` | – | versioned JSON preset for the live workspace: dock tree, active tabs, split sizes, folded groups, floating panels, focus and layout-related panel state |
+| `ui.layout.apply` | `{layout, workspace?, save?}` | apply an exported preset; `layout` is its JSON object or serialized JSON text. `workspace` chooses an existing workspace (defaults to the preset's workspace); `save: true` also saves the dock layout as that workspace's saved layout |
 | `ui.inspect` | – | UI state (tool, workspace, dock, timeline view, playback, fps…) |
 | `ui.docking` | – | the panel layout (craft-ui `Layout`), the focused and maximized panel, and `hitRects`: each docking gesture source drawn last frame (`{hit, rect}`) |
 | `ui.elements` | `{prefix?}` | every on-screen interactive element: id, label, rect (`status.text` carries the status bar's whole message or hint, even when the bar shows it shortened); `window` (the `n` of `panel.float.<n>`) marks an element drawn in a floating panel's own OS window, whose rect is in that window's coordinates |
@@ -67,6 +69,23 @@ Methods (handlers in `crates/ui-egui/src/control.rs`):
 For `ui.click` and `ui.drag`, omitted or null counts/steps use the defaults. Out-of-range or
 non-integer values return `{"ok": false, "error": "…"}` before queuing any pointer input.
 These limits also apply to the MCP bridge's `ui_click`, `ui_drag` and `ui_control` tools.
+
+`ui.layout.export` returns a `filmcraft.ui-layout` version 1 object. The `layout` field preserves
+the complete docking tree, including active tabs, ratio or fixed-point split sizing, accordion
+open state, minimized groups and floating panels. Floating-panel rectangles (and remembered
+closed-floating rectangles) use fractions of the source viewport, so they scale to the viewport
+when applied. Platform-specific native-window and monitor placement is omitted. The `ui` field
+preserves focused panel, Effect Controls divider width, expanded/collapsed Effects folders and
+sections, the scopes toggle, menu/header/status visibility, and the Audio Track Mixer effects
+section state, selected Essential Sound/Text tabs, and Timeline track/header dimensions, video/audio
+split, thumbnail/waveform/name toggles and follow mode. Timeline zoom/scroll and project selections
+and other document-specific state are intentionally excluded.
+
+`ui.layout.apply` validates the complete preset (maximum 1 MiB) before changing the UI. Ratios stay
+adaptive; fixed split widths and heights remain logical points. With `save: true`, the dock tree is
+also persisted as the selected workspace's saved layout; the preset JSON remains the portable
+record for the additional panel UI state. Applying without `save` is immediate and does not replace
+the workspace's saved layout.
 
 **Timeline thumbnails.** `ui.set {timeline: {thumbnails}}` sets the Timeline wrench menu's Show Video
 Thumbnails: `off`, `head`, `headAndTail` or `continuous`.

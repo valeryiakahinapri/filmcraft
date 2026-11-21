@@ -26,6 +26,21 @@ than native paths, and receive typed bytes/JSON rather than relying on CLI stdou
 Long-running work must pump jobs cooperatively and yield to the browser event loop; it must not
 block the UI indefinitely.
 
+## Keep UI control distinct from the headless bridge
+
+`window.filmcraft.request(...)` controls the visible editor through the UI control channel;
+`filmcraft.createBridge()` creates an independent engine session and cannot inspect or rearrange
+the editor's panels. Add editor-specific operations to the control channel, then expose thin page
+API helpers when they improve use from a browser host.
+
+Portable layout JSON should wrap and validate the docking model already used by the UI. Preserve
+active tabs, ratio/fixed split kinds, accordion open state, minimized groups and relevant panel
+folding preferences. Normalize floating geometry against the source viewport and strip desktop
+monitor/native-window placement. Exclude project-specific Timeline zoom/scroll and selections.
+Bound and validate the complete profile before applying it, so malformed input leaves the current
+workspace unchanged. Keep applying a profile distinct from saving it as a named workspace's
+default; make persistence semantics explicit.
+
 ## Compare behavior, not just symbols
 
 The Node bridge test should load the real wasm-bindgen output and exercise representative operations

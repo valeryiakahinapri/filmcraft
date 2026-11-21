@@ -24,6 +24,12 @@ pub static INTER_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/Inter-Ita
 pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
 pub static NOTO_SERIF_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/NotoSerif-Regular.ttf");
 
+/// Noto Serif is an optional desktop face; omitting it keeps browser downloads smaller.
+#[cfg(target_arch = "wasm32")]
+const BUNDLED_FONTS: &[&[u8]] = &[INTER_REGULAR, INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD, INTER_ITALIC, JETBRAINS_MONO_REGULAR];
+#[cfg(not(target_arch = "wasm32"))]
+const BUNDLED_FONTS: &[&[u8]] = &[INTER_REGULAR, INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD, INTER_ITALIC, JETBRAINS_MONO_REGULAR, NOTO_SERIF_REGULAR];
+
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`; see
 /// `build.rs` and storytold/craft-fonts `docs/integration.md`).
 pub struct CraftFont {
@@ -382,7 +388,7 @@ fn db() -> &'static RwLock<Db> {
         };
         let fallback = Arc::new(Face { id: 0, info, bytes: OnceLock::new(), shaper: OnceLock::new() });
         let mut db = Db { faces: Vec::new(), fallback, scanned: false };
-        for b in [INTER_REGULAR, INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD, INTER_ITALIC, JETBRAINS_MONO_REGULAR, NOTO_SERIF_REGULAR] {
+        for &b in BUNDLED_FONTS {
             for n in read_faces_bytes(b) {
                 push(&mut db, info_from(n, FaceData::Static(b), "bundled"));
             }

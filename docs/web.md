@@ -1,8 +1,8 @@
 # FilmCraft on the web
 
 `apps/filmcraft-web` runs the same engine and egui UI as the desktop app in the browser: the
-workspace compiled to `wasm32-unknown-unknown`, started by eframe's web runner on WebGPU (WebGL2
-fallback). The app is a static site: one `.wasm`, its `wasm-bindgen` JavaScript glue, `index.html`,
+workspace compiled to `wasm32-unknown-unknown`, started by eframe's web runner on WebGPU only.
+The app is a static site: one `.wasm`, its `wasm-bindgen` JavaScript glue, `index.html`,
 an `AudioWorklet` script and an icon. Files stay on the user's machine unless the user explicitly
 uses the optional cloud-workspace API described below.
 
@@ -22,9 +22,12 @@ cargo xtask web --serve 8765    # build, then serve dist on http://127.0.0.1:876
 
 The release build uses Rust's optimized profile (opt-level 3, thin LTO, one codegen unit). When
 Binaryen's `wasm-opt` is installed, `cargo xtask web` applies its `-O2` pass to the bound WASM as
-well. For the current codec set this reduces the app from about 53 MiB to 42 MiB; higher `-O3`
-post-optimization was not faster in a local H.264 export comparison. Browsers remain single-threaded
-in this build, so software exports cannot use the native encoder thread pool.
+well. For the current codec set the optimized WASM is 39,126,617 bytes (39.13 MB; 14,516,260 bytes
+with gzip), down from 42,139,756 bytes in the previous build: 7.15% smaller raw and 7.57% smaller
+with gzip. This change uses WebGPU without eframe's WebGL backend and omits the optional Noto Serif
+font on the web. Higher `-O3` post-optimization was not faster in a local H.264 export comparison.
+Browsers remain single-threaded in this build, so software exports cannot use the native encoder
+thread pool.
 
 `--serve` is a tiny localhost-only static server that sends `Cross-Origin-Opener-Policy` /
 `Cross-Origin-Embedder-Policy`, so the page is cross-origin isolated like a production deployment
@@ -36,9 +39,8 @@ unaffected; `cargo xtask wasm` (part of `cargo xtask ci`) checks it, with `filmc
 `wasm32-unknown-unknown`.
 
 URL flags: `?empty` (no demo project), `?norecover` (don't reopen the auto-saved project),
-`?fresh` (also don't restore media kept in OPFS), `?cpu` (CPU compositor), `?webgl` (WebGL2 only;
-the page reloads with it when WebGPU is present but fails to start), `?nowebcodecs` (decode with
-FilmCraft's own decoders only), `?host=parent` (host mode: a same-origin page embedding the app
+`?fresh` (also don't restore media kept in OPFS), `?nowebcodecs` (decode with FilmCraft's own
+decoders only), `?host=parent` (host mode: a same-origin page embedding the app
 hands it files and takes its saves back instead of downloads; `data-host="page"` on the canvas
 is the no-iframe form — [hosting](../packaging/web/README.md)).
 
@@ -52,7 +54,7 @@ panic on `wasm32-unknown-unknown` (use `filmcraft_engine::temp_dir`, `web_time`,
 
 | Desktop | Web |
 |---|---|
-| frame worker threads | `FrameServer::pump`: queued frame jobs run on the UI thread between egui frames, highest priority first, within a time budget (24 ms while playing, 40 ms otherwise) |
+| frame worker threads | `FrameServer::pump`: queued frame jobs run on the UI thread between egui frames, highest priority first, within a time budget (6 ms while timeline scrubbing, 24 ms while playing, 40 ms otherwise) |
 | export on a worker thread | `filmcraft_export::Exporter`: the export advances one frame per step from `Session::pump_jobs`, 30 ms per UI frame; progress shows in the header like on the desktop |
 | `std::fs` (`FsServices`) | `fs::WebServices`: a virtual file table. Picked/dropped files are `File` handles (never copied); files the app writes are kept in memory and offered as downloads |
 | file dialogs | File System Access `showOpenFilePicker` where available, else `<input type=file>`; drop files anywhere on the page |
@@ -111,9 +113,24 @@ until the first click or key press; until then playback runs on the wall clock.
 
 ### GPU
 
-eframe creates a WebGPU device when the browser has one, else WebGL2. FilmCraft's GPU compositor
-(`filmcraft-gpu`) is used on WebGPU; on WebGL2 frames are composited on the CPU. Check
+The browser build contains only eframe's WebGPU backend; WebGL2 and the `?webgl`/`?cpu` launch
+overrides are not included. Serve it over HTTPS (or localhost) in a browser with WebGPU enabled.
+FilmCraft's `filmcraft-gpu` compositor uses the adapter when it supports the required floating
+point render targets; otherwise the app reports that it is using the CPU compositor. Check
 `filmcraft.info().backend` and `.compositor`.
+
+The reported size delta is for the combined WebGPU-only dependency selection and removal of the
+optional Noto Serif web font; it is not a per-module profile. Noto Serif's source file is 482,540
+bytes. The CPU renderer and codec implementations remain because the bridge, exports, and GPU
+fallback paths still use them; their savings have not been independently measured and they are not
+safe removal candidates without further call-graph and feature analysis.
+
+While dragging the Timeline playhead, the browser requests preview frames no more often than 15 fps
+and caps their resolution at one half. It gives each cooperative frame-pump pass a 6 ms budget so
+input and painting can proceed; on release it immediately requests the normal paused resolution. Audio
+scrubbing is disabled in the browser to avoid mixing audio on the UI thread while dragging.
+The optional Noto Serif face is not bundled for the web; unknown or unavailable families fall back
+to Inter, while native builds retain all bundled fonts.
 
 ## `window.filmcraft`: the agent / test API
 
@@ -129,6 +146,8 @@ with the method's `result`, errors reject.
 | `filmcraft.commands()` | the command list |
 | `filmcraft.inspect()` / `filmcraft.uiInspect(params)` | `ui.inspect` |
 | `filmcraft.screenshot(params)` | `{pngBase64, width, height}` of the canvas (or `{panel}`), and the same PNG as `data` |
+| `filmcraft.exportLayout()` | portable, versioned JSON object for the visible editor's current layout |
+| `filmcraft.applyLayout(layout, options?)` | apply an exported object or JSON string; options may include `{workspace: "Color", save: true}` |
 | `filmcraft.importFiles(files)` | import `File` / `FileList` / `File[]`; resolves `{items, errors, paths}` |
 | `filmcraft.importUrl(url, name?)` | fetch a URL and import it (tests) |
 | `filmcraft.openProject(fileOrUrl)` | open a `.fcproj` |
@@ -137,6 +156,29 @@ with the method's `result`, errors reject.
 | `filmcraft.info()` | backend, compositor, isolation, OPFS, WebCodecs support and counters, start-up time |
 
 `window.filmcraftLoad` holds `{wasmMs, readyMs}` (module fetch+compile, and until the app runs).
+
+`exportLayout()` captures the live UI session, not the independent headless `FilmCraftBridge`.
+Save the returned object as JSON with `JSON.stringify(await filmcraft.exportLayout(), null, 2)`.
+The versioned `filmcraft.ui-layout` profile includes the entire docking tree (active tabs, adaptive
+ratios, fixed point sizes, accordion/minimized state, floating panels), focused panel, remembered
+floating-panel locations and layout-related panel state, including Timeline track/header sizing and
+view toggles. Floating rectangles are normalized to the viewport and rescaled on apply; desktop-only
+native-window placement is excluded. It deliberately does not capture project-specific Timeline
+zoom/scroll or selections.
+
+`applyLayout(profile)` accepts that object or its JSON text and applies it to the workspace named
+inside the profile. Use `applyLayout(profile, {workspace: "Color"})` to apply it to another existing
+workspace. The optional `save: true` also stores the dock tree as that workspace's saved layout;
+the profile JSON itself is the portable way to preserve and reapply the additional panel UI state:
+
+```js
+const profile = await filmcraft.exportLayout();
+const json = JSON.stringify(profile, null, 2); // save or download this JSON
+await filmcraft.applyLayout(json, {workspace: "Color", save: true});
+```
+
+Applying a preset validates it before changing the visible UI; malformed or over-1-MiB profiles
+reject with an error.
 
 ```js
 await filmcraft.importUrl("/clip.mp4");

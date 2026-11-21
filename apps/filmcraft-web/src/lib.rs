@@ -1,7 +1,7 @@
 //! FilmCraft in the browser.
 //!
 //! The same engine and egui UI as the desktop app, compiled to `wasm32-unknown-unknown` and run
-//! by eframe's web runner on WebGPU (WebGL2 fallback). What the desktop shell gets from the OS,
+//! by eframe's web runner on WebGPU. What the desktop shell gets from the OS,
 //! this crate gets from the browser:
 //!
 //! | Desktop | Web ([module]) |
@@ -168,14 +168,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     import::install_drop_handlers()?;
 
     let demo = !in_host_mode && !query_flag("empty");
-    let mut web_options = eframe::WebOptions::default();
-    // `?webgl`: WebGL2 only. The page reloads with it when starting on WebGPU fails (an adapter
-    // whose device can't be created, a driver the browser rejects…); see `index.html`.
-    if query_flag("webgl")
-        && let eframe::egui_wgpu::WgpuSetup::CreateNew(c) = &mut web_options.wgpu_options.wgpu_setup
-    {
-        c.instance_descriptor.backends = eframe::wgpu::Backends::GL;
-    }
+    let web_options = eframe::WebOptions::default();
     let runner = eframe::WebRunner::new();
     let host_for_app = host.clone();
     let started = runner
@@ -230,14 +223,12 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
                 }
                 let backend = cc.wgpu_render_state.as_ref().map(|rs| rs.adapter.get_info().backend);
                 set_info("backend", json!(backend.map(|b| format!("{b:?}"))));
-                // The GPU compositor needs float render targets everywhere: WebGPU only (WebGL2
-                // composites on the CPU).
+                // The browser build has only the WebGPU backend; report whether FilmCraft's
+                // compositor initialized instead of assuming adapter creation means it did.
                 if let Some(rs) = cc.wgpu_render_state.clone()
                     && backend == Some(eframe::wgpu::Backend::BrowserWebGpu)
-                    && !query_flag("cpu")
                 {
-                    app.set_wgpu(rs);
-                    set_info("compositor", json!("gpu"));
+                    set_info("compositor", json!(if app.set_wgpu(rs) { "gpu" } else { "cpu" }));
                 } else {
                     set_info("compositor", json!("cpu"));
                 }

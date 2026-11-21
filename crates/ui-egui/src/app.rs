@@ -19,6 +19,17 @@ mod prefs;
 mod textures;
 mod window;
 
+fn frame_pump_budget(playing: bool, web_scrubbing: bool) -> std::time::Duration {
+    let ms = if web_scrubbing {
+        6
+    } else if playing {
+        24
+    } else {
+        40
+    };
+    std::time::Duration::from_millis(ms)
+}
+
 impl FilmcraftApp {
     /// Build the app around one shared `FrameServer`, falling back to the default language on an unparsable preference, loading workspaces from the prefs
     /// directory and seeding IME epoch/sequence identity.
@@ -266,7 +277,8 @@ impl FilmcraftApp {
     /// Background queues and idempotent deadlines that are safe on every logic call.
     fn logic_background(&mut self, ctx: &egui::Context, now: f64) {
         self.frames.set_context(ctx);
-        self.frames.pump(std::time::Duration::from_millis(if self.playback.playing { 24 } else { 40 }));
+        let web_scrubbing = cfg!(target_arch = "wasm32") && matches!(self.tl.drag.as_ref(), Some(crate::panels::timeline::Drag::Scrub { .. }));
+        self.frames.pump(frame_pump_budget(self.playback.playing, web_scrubbing));
         self.session.poll_persistence();
         panels::trim_monitor::advance_at(self, now);
         if self.session.trim_play.active() {
@@ -551,6 +563,13 @@ mod lifecycle_synthetic_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn frame_pump_budget_yields_more_time_to_web_scrub_input() {
+        assert_eq!(super::frame_pump_budget(false, true), std::time::Duration::from_millis(6));
+        assert_eq!(super::frame_pump_budget(true, false), std::time::Duration::from_millis(24));
+        assert_eq!(super::frame_pump_budget(false, false), std::time::Duration::from_millis(40));
     }
 
     /// `raw_input_hook` runs before hidden logic ticks too, but those raw events are not fed to

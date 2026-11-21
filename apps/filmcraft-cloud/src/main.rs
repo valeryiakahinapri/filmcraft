@@ -193,12 +193,14 @@ impl AppState {
                 return Err(ApiError::new(StatusCode::CONFLICT, "proxy source version is stale"));
             }
         }
+        let mut created_target = false;
         match tokio::fs::try_exists(&target_path).await {
             Ok(false) => {
                 if let Err(error) = tokio::fs::rename(&temp_path, &target_path).await {
                     remove_upload_temp(&temp_path).await;
                     return Err(ApiError::internal(error));
                 }
+                created_target = true;
             }
             Ok(true) => {
                 if let Err(error) = tokio::fs::remove_file(&temp_path).await {
@@ -212,6 +214,23 @@ impl AppState {
         }
 
         let variant = VariantRecord { name, size, etag, source_etag: (kind == VariantKind::Proxy).then_some(source_etag).flatten() };
+        let old_paths: Vec<PathBuf> = match kind {
+            VariantKind::Source => assets
+                .get(&id)
+                .map(|asset| {
+                    let mut paths = vec![variant_path(&self.root, &id, "source", &asset.source.etag)];
+                    if let Some(proxy) = &asset.proxy {
+                        paths.push(variant_path(&self.root, &id, "proxy", &proxy.etag));
+                    }
+                    paths
+                })
+                .unwrap_or_default(),
+            VariantKind::Proxy => assets
+                .get(&id)
+                .and_then(|asset| asset.proxy.as_ref())
+                .map(|proxy| vec![variant_path(&self.root, &id, "proxy", &proxy.etag)])
+                .unwrap_or_default(),
+        };
         let mut next = assets.clone();
         match kind {
             VariantKind::Source => {
@@ -224,15 +243,26 @@ impl AppState {
                 asset.proxy = Some(variant);
             }
         }
-        write_manifest(&self.root, &next).await.map_err(ApiError::internal)?;
+        if let Err(error) = write_manifest(&self.root, &next).await {
+            if created_target {
+                remove_file_if_present(&target_path, "uncommitted upload").await;
+            }
+            return Err(ApiError::internal(error));
+        }
         let Some(record) = next.get(&id).cloned() else {
             return Err(ApiError::internal("uploaded asset was not committed"));
         };
         *assets = next;
+        drop(assets);
+        for path in old_paths {
+            if path != target_path {
+                remove_file_if_present(&path, "superseded media variant").await;
+            }
+        }
         Ok(record)
     }
 
-    async fn variant(&self, id: &str, kind: VariantKind) -> Result<(VariantRecord, PathBuf), ApiError> {
+    async fn variant(&self, id: &str, kind: VariantKind) -> Result<(VariantRecord, tokio::fs::File), ApiError> {
         let assets = self.assets.lock().await;
         let asset = assets.get(id).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "asset not found"))?;
         let variant = match kind {
@@ -246,7 +276,8 @@ impl AppState {
             }
         };
         let path = variant_path(&self.root, id, kind.as_str(), &variant.etag);
-        Ok((variant, path))
+        let file = tokio::fs::File::open(path).await.map_err(ApiError::internal)?;
+        Ok((variant, file))
     }
 }
 
@@ -310,7 +341,7 @@ async fn download_variant(state: &AppState, id: &str, kind: VariantKind, headers
     if !valid_id(id) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid asset ID"));
     }
-    let (variant, path) = state.variant(id, kind).await?;
+    let (variant, mut file) = state.variant(id, kind).await?;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(ETAG, etag_header(&variant.etag)?);
     response_headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
@@ -333,7 +364,6 @@ async fn download_variant(state: &AppState, id: &str, kind: VariantKind, headers
         Some((start, end)) => (start, end - start + 1, StatusCode::PARTIAL_CONTENT),
         None => (0, variant.size, StatusCode::OK),
     };
-    let mut file = tokio::fs::File::open(path).await.map_err(ApiError::internal)?;
     if start > 0 {
         file.seek(SeekFrom::Start(start)).await.map_err(ApiError::internal)?;
     }
@@ -443,6 +473,14 @@ async fn remove_upload_temp(path: &Path) {
         && error.kind() != std::io::ErrorKind::NotFound
     {
         eprintln!("filmcraft-cloud: removing incomplete upload: {error}");
+    }
+}
+
+async fn remove_file_if_present(path: &Path, description: &str) {
+    if let Err(error) = tokio::fs::remove_file(path).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("filmcraft-cloud: removing {description}: {error}");
     }
 }
 
@@ -631,6 +669,8 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.expect("replacement response")).expect("asset JSON");
         assert_ne!(updated.source.etag, asset.source.etag);
         assert!(updated.proxy.is_none(), "replacing source invalidates its proxy");
+        assert!(!variant_path(directory.path(), "asset-1", "source", &asset.source.etag).exists());
+        assert!(!variant_path(directory.path(), "asset-1", "proxy", &with_proxy.proxy.as_ref().unwrap().etag).exists());
 
         let stale_proxy = request(
             router,
@@ -644,6 +684,45 @@ mod tests {
         )
         .await;
         assert_eq!(stale_proxy.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn failed_manifest_commit_keeps_old_source_and_removes_new_file() {
+        let directory = tempfile::tempdir().expect("temporary storage");
+        let state = AppState::open(directory.path().to_path_buf()).await.expect("open storage");
+        let router = app(state.clone());
+        let original = b"original-source";
+        let response = request(
+            router.clone(),
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/api/v1/assets/asset-2/source")
+                .header("x-asset-name", "source.mp4")
+                .body(Body::from(original.as_slice()))
+                .expect("source upload request"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let original_etag = format!("sha256-{}", hex_digest(&Sha256::digest(original)));
+        let original_path = variant_path(directory.path(), "asset-2", "source", &original_etag);
+        tokio::fs::create_dir(directory.path().join(MANIFEST_TMP)).await.expect("block manifest commit");
+
+        let replacement = b"replacement-source";
+        let response = request(
+            router,
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/api/v1/assets/asset-2/source")
+                .header("x-asset-name", "source.mp4")
+                .body(Body::from(replacement.as_slice()))
+                .expect("replacement request"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(original_path.exists(), "a failed replacement must keep the source in the manifest");
+        let replacement_etag = format!("sha256-{}", hex_digest(&Sha256::digest(replacement)));
+        assert!(!variant_path(directory.path(), "asset-2", "source", &replacement_etag).exists());
+        assert_eq!(state.assets.lock().await["asset-2"].source.etag, original_etag);
     }
 
     #[tokio::test]

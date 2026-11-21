@@ -236,9 +236,9 @@ impl Tokens {
             monitor_bg: Color32::from_rgb(0x1d, 0x1d, 0x1d),
             timecode: Color32::from_rgb(0x40, 0x96, 0xf3),
             danger: Color32::from_rgb(0xdc, 0x51, 0x3d),
-            radius: 8.0,
-            radius_sm: 4.0,
-            gap: 6.0,
+            radius: 12.0,
+            radius_sm: 6.0,
+            gap: 8.0,
             tab_h: 32.0,
         };
         match kind {
@@ -473,7 +473,7 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     v.hyperlink_color = t.accent;
     v.window_stroke = Stroke::new(1.0, t.field_border);
     v.window_corner_radius = egui::CornerRadius::same(t.radius as u8);
-    v.menu_corner_radius = egui::CornerRadius::same(6);
+    v.menu_corner_radius = egui::CornerRadius::same(t.radius as u8);
     v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(140) };
     v.window_shadow = v.popup_shadow;
     for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
@@ -560,11 +560,12 @@ mod tests {
     fn every_theme_uses_rounded_surface_and_widget_corners() {
         for kind in [ThemeKind::Dark, ThemeKind::Medium, ThemeKind::Light] {
             let t = Tokens::for_kind(kind);
-            assert!(t.radius >= t.radius_sm && t.radius_sm > 0.0);
+            assert!(t.radius >= 12.0 && t.radius_sm >= 6.0 && t.gap >= 8.0, "rounded panels need visible corners and gutters");
             let ctx = egui::Context::default();
             apply_visuals(&ctx, &t);
             let style = ctx.style_of(ctx.theme());
             assert_eq!(style.visuals.window_corner_radius, egui::CornerRadius::same(t.radius as u8));
+            assert_eq!(style.visuals.menu_corner_radius, egui::CornerRadius::same(t.radius as u8));
             assert_eq!(style.visuals.widgets.inactive.corner_radius, egui::CornerRadius::same(t.radius_sm as u8));
         }
     }

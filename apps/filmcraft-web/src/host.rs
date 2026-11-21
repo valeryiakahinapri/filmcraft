@@ -101,7 +101,7 @@ impl Bridge {
         let _ = self.host.post_ready(env!("CARGO_PKG_VERSION"), false);
     }
 
-    /// The app couldn't start (no WebGPU or WebGL2, for example): let the host say so.
+    /// The app couldn't start (WebGPU is unavailable, for example): let the host say so.
     pub fn post_failed(&self, error: &str) {
         let _ = self.host.post_failed(error, None);
     }

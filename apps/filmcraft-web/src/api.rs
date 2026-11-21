@@ -13,6 +13,8 @@
 //! await filmcraft.importUrl("/clip.mp4")                   // fetch + import (tests)
 //! await filmcraft.importFiles(input.files)                 // File / FileList / File[]
 //! await filmcraft.openProject(file)                        // .fcproj File or URL
+//! const layout = await filmcraft.exportLayout()            // portable current UI layout
+//! await filmcraft.applyLayout(layout, {workspace: "Color", save: true})
 //! const bridge = filmcraft.createBridge()                   // independent headless JS session
 //! filmcraft.files(); await filmcraft.readFile("/exports/a.mp4"); filmcraft.info()
 //! ```
@@ -135,14 +137,32 @@ pub fn install() -> Result<(), JsValue> {
     set_fn(
         &obj,
         "inspect",
-        Closure::<dyn Fn() -> js_sys::Promise>::new(|| {
-            future_to_promise(async {
-                let reply = send("ui.inspect", json!({})).await;
-                if reply.get("ok").and_then(Value::as_bool) == Some(true) {
-                    Ok(to_js(reply.get("result").unwrap_or(&Value::Null)))
-                } else {
-                    Err(js_sys::Error::new(reply.get("error").and_then(Value::as_str).unwrap_or("error")).into())
+        Closure::<dyn Fn() -> js_sys::Promise>::new(|| future_to_promise(async { control_result(send("ui.inspect", json!({})).await) })).into_js_value(),
+    )?;
+    set_fn(
+        &obj,
+        "exportLayout",
+        Closure::<dyn Fn() -> js_sys::Promise>::new(|| future_to_promise(async { control_result(send("ui.layout.export", json!({})).await) })).into_js_value(),
+    )?;
+    set_fn(
+        &obj,
+        "applyLayout",
+        Closure::<dyn Fn(JsValue, JsValue) -> js_sys::Promise>::new(|layout: JsValue, options: JsValue| {
+            future_to_promise(async move {
+                let layout = json_from_js(&layout)?;
+                let options = if options.is_undefined() || options.is_null() { json!({}) } else { json_from_js(&options)? };
+                let Some(options) = options.as_object() else {
+                    return Err(js_sys::Error::new("layout options must be an object").into());
+                };
+                if options.keys().any(|key| !matches!(key.as_str(), "workspace" | "save")) {
+                    return Err(js_sys::Error::new("layout options accept only `workspace` and `save`").into());
                 }
+                let mut params = serde_json::Map::new();
+                params.insert("layout".into(), layout);
+                for (key, value) in options {
+                    params.insert(key.clone(), value.clone());
+                }
+                control_result(send("ui.layout.apply", Value::Object(params)).await)
             })
         })
         .into_js_value(),
@@ -229,4 +249,17 @@ fn as_error(e: JsValue) -> JsValue {
     }
     let msg = e.as_string().unwrap_or_else(|| format!("{e:?}"));
     js_sys::Error::new(&msg).into()
+}
+
+fn json_from_js(value: &JsValue) -> Result<Value, JsValue> {
+    let text = js_sys::JSON::stringify(value)?.as_string().ok_or_else(|| js_sys::Error::new("value cannot be serialized as JSON"))?;
+    serde_json::from_str(&text).map_err(|error| js_sys::Error::new(&format!("invalid JSON value: {error}")).into())
+}
+
+fn control_result(reply: Value) -> Result<JsValue, JsValue> {
+    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+        Ok(to_js(reply.get("result").unwrap_or(&Value::Null)))
+    } else {
+        Err(js_sys::Error::new(reply.get("error").and_then(Value::as_str).unwrap_or("control request failed")).into())
+    }
 }

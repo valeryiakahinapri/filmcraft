@@ -1249,6 +1249,60 @@ pub fn external_commands() -> Vec<filmcraft_engine::shortcuts::CommandInfo> {
 
 /// Draw the in-window menu bar.
 pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
+    #[cfg(target_arch = "wasm32")]
+    web_menu_bar(app, ui);
+    #[cfg(not(target_arch = "wasm32"))]
+    native_menu_bar(app, ui);
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn web_menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
+    use egui::{Color32, Stroke, vec2};
+
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
+    let items = menu_items_with_focus(app, ui.ctx());
+    let labels = app.session.prefs.labels.clone();
+    let ctx = ui.ctx().clone();
+    let t = app.tokens;
+    let response = ui
+        .add_sized(
+            vec2(30.0, 30.0),
+            egui::Button::new(egui::RichText::new("Menu").size(1.0).color(Color32::TRANSPARENT)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE),
+        )
+        .on_hover_text(tl!("Menu"));
+    if response.hovered() {
+        ui.painter().rect_filled(response.rect, t.radius_sm, t.hover);
+    }
+    // Keep an accessible label in the widget while drawing the established vector icon.
+    crate::icons::paint(ui.painter(), response.rect.shrink(7.0), crate::icons::Icon::Hamburger, if response.hovered() { t.text } else { t.text_dim });
+    app.auto.add("header.menu", response.rect, "Menu");
+
+    let mut clicked: Option<String> = None;
+    egui::Popup::menu(&response).width(240.0).show(|ui| {
+        crate::theme::menu_style(ui.style_mut());
+        ui.set_min_width(240.0);
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            for top in MENUS {
+                let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
+                let title = app.ui.language.tr(top);
+                let r = ui.menu_button(title, |ui| {
+                    ui.set_min_width(260.0);
+                    if mine.is_empty() {
+                        ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
+                    }
+                    menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
+                });
+                app.auto.add(&format!("menu.{top}"), r.response.rect, top);
+            }
+        });
+    });
+    if let Some(id) = clicked {
+        let _ = invoke(app, &ctx, &id, json!({}));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
     let items = menu_items_with_focus(app, ui.ctx());
     // Draw Edit ▸ Label with the user's live palette, not the baked-in label colours.
@@ -1279,6 +1333,7 @@ pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
 
 /// Like a native menu bar (Windows, macOS): while one top-level menu is open, hovering another
 /// top-level title opens that menu instead (#1500). egui's `MenuBar` only switches on click.
+#[cfg(not(target_arch = "wasm32"))]
 fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
     let ids: Vec<egui::Id> = titles.iter().map(egui::Popup::default_response_id).collect();
     let Some(open) = ids.iter().position(|id| egui::Popup::is_id_open(ctx, *id)) else { return };
@@ -1616,5 +1671,28 @@ mod tests {
         harness.run_steps(4);
         assert!(harness.query_by_label_contains("Save All").is_none(), "File menu should close");
         assert!(harness.query_by_label_contains("Undo").is_some(), "Edit menu should open on hover");
+    }
+
+    #[test]
+    fn web_menu_opens_from_hamburger_and_cascades_vertically_then_horizontally() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu_bar(app, ui), app);
+        crate::theme::install(&harness.ctx, &harness.state().tokens);
+        harness.run_steps(3);
+
+        assert!(harness.query_by_label("File").is_none());
+        harness.get_by_label("Menu").click();
+        harness.run_steps(3);
+        assert!(harness.query_by_label("File").is_some(), "hamburger did not open the vertical menu");
+        assert!(harness.query_by_label("New").is_none(), "File submenu opened before selecting File");
+
+        harness.get_by_label("File").click();
+        harness.run_steps(3);
+        assert!(harness.query_by_label("New").is_some(), "File submenu did not open");
+        harness.get_by_label("New").hover();
+        harness.run_steps(3);
+        assert!(harness.query_by_label_contains("Color Matte…").is_some(), "nested New submenu did not cascade");
     }
 }
