@@ -142,15 +142,15 @@ fn mpeg_details(src: &crate::MpegSource) -> Value {
 /// Probe media bytes and include container-specific details shared with `filmcraft-cli probe`.
 pub fn probe_bytes(name: &str, bytes: Arc<[u8]>) -> Result<Value, String> {
     let head_len = bytes.len().min(70_000);
-    let head = bytes.get(..head_len).ok_or_else(|| format!("{name}: invalid media header range"))?;
+    let head = bytes.get(..head_len).ok_or_else(|| "invalid media header range".to_string())?;
     if craft_media::mxf::sniff(head) {
-        let source = crate::MxfSource::open(name, bytes).map_err(|error| format!("{name}: {error}"))?;
+        let source = crate::MxfSource::open(name, bytes).map_err(|error| error.to_string())?;
         let mut value = serde_json::to_value(filmcraft_media::MediaSource::info(&source)).map_err(|error| format!("serialize media info: {error}"))?;
         value["mxf"] = mxf_details(&source);
         return Ok(value);
     }
     if crate::mpeg::sniff(head) {
-        let source = crate::MpegSource::open(name, bytes).map_err(|error| format!("{name}: {error}"))?;
+        let source = crate::MpegSource::open(name, bytes).map_err(|error| error.to_string())?;
         let mut value = serde_json::to_value(filmcraft_media::MediaSource::info(&source)).map_err(|error| format!("serialize media info: {error}"))?;
         value["mpeg"] = mpeg_details(&source);
         return Ok(value);
@@ -162,7 +162,7 @@ pub fn probe_bytes(name: &str, bytes: Arc<[u8]>) -> Result<Value, String> {
         value["ogg"] = ogg_details(&source);
         return Ok(value);
     }
-    let source = crate::open_bytes(name, bytes.clone()).map_err(|error| format!("{name}: {error}"))?;
+    let source = crate::open_bytes(name, bytes.clone()).map_err(|error| error.to_string())?;
     let mut value = serde_json::to_value(source.info()).map_err(|error| format!("serialize media info: {error}"))?;
     if filmcraft_media::wav::sniff(head)
         && let Ok(wave) = filmcraft_media::wav::WavSource::parse(name, bytes)

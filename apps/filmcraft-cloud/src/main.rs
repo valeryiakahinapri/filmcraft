@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path as RoutePath, Request, State};
@@ -22,13 +23,17 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
 const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_ASSETS: usize = 10_000;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+/// How long one upload may go without receiving bytes before it is abandoned.
+const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Concurrent uploads; each holds a socket and up to 8 GiB of temp disk.
+const MAX_CONCURRENT_UPLOADS: usize = 4;
 const MANIFEST: &str = "assets.json";
 const MANIFEST_TMP: &str = "assets.json.tmp";
 const MANIFEST_BACKUP: &str = "assets.json.bak";
@@ -39,6 +44,7 @@ static NEXT_UPLOAD_ID: AtomicU64 = AtomicU64::new(1);
 struct AppState {
     root: Arc<PathBuf>,
     assets: Arc<Mutex<BTreeMap<String, AssetRecord>>>,
+    uploads: Arc<Semaphore>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -129,7 +135,27 @@ impl AppState {
                 }
             }
         }
-        Ok(Self { root: Arc::new(root), assets: Arc::new(Mutex::new(assets)) })
+        sweep_orphans(&root, &assets).await;
+        Ok(Self { root: Arc::new(root.clone()), assets: Arc::new(Mutex::new(assets)), uploads: Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS)) })
+    }
+
+    /// A doomed upload should fail before streaming: check the knowable reasons (workspace full,
+    /// unknown source asset, stale source version) up front, and re-check under the lock at commit
+    /// time. Kept cheap: it reads the shared map without holding it across the stream.
+    async fn check_admissible(&self, id: &str, kind: VariantKind, source_etag: Option<&str>) -> Result<(), ApiError> {
+        let assets = self.assets.lock().await;
+        if kind == VariantKind::Source && !assets.contains_key(id) && assets.len() >= MAX_ASSETS {
+            return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "workspace is limited to 10000 assets"));
+        }
+        if let VariantKind::Proxy = kind {
+            let Some(current) = assets.get(id) else {
+                return Err(ApiError::new(StatusCode::NOT_FOUND, "source asset not found"));
+            };
+            if source_etag != Some(current.source.etag.as_str()) {
+                return Err(ApiError::new(StatusCode::CONFLICT, "proxy source version is stale"));
+            }
+        }
+        Ok(())
     }
 
     async fn upload(
@@ -150,13 +176,22 @@ impl AppState {
             return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "uploads are limited to 8 GiB"));
         }
         let name = safe_asset_name(&name).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "asset name is invalid"))?;
+        // Reject the knowable failures (workspace full, unknown asset, stale source version)
+        // before streaming so a doomed request never writes gigabytes to temp disk first.
+        self.check_admissible(&id, kind, source_etag.as_deref()).await?;
+        // Each upload holds a socket and a temp file for its duration; cap how many run at once.
+        let upload_permit = self.uploads.acquire().await.map_err(ApiError::internal)?;
         let temp_path = upload_temp_path(&self.root);
         let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&temp_path).await.map_err(ApiError::internal)?;
         let mut hasher = Sha256::new();
         let mut size = 0u64;
         let upload = async {
             let mut chunks = body.into_data_stream();
-            while let Some(chunk) = chunks.next().await {
+            loop {
+                // A paused or stalled client must not hold an upload open indefinitely.
+                let chunk =
+                    tokio::time::timeout(UPLOAD_IDLE_TIMEOUT, chunks.next()).await.map_err(|_| ApiError::new(StatusCode::REQUEST_TIMEOUT, "upload stalled"))?;
+                let Some(chunk) = chunk else { break };
                 let chunk = chunk.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "upload body could not be read"))?;
                 size = size.checked_add(chunk.len() as u64).ok_or_else(|| ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "upload is too large"))?;
                 if size > MAX_UPLOAD_BYTES {
@@ -170,6 +205,7 @@ impl AppState {
         }
         .await;
         drop(file);
+        drop(upload_permit);
         if let Err(error) = upload {
             if let Err(cleanup) = tokio::fs::remove_file(&temp_path).await {
                 eprintln!("filmcraft-cloud: removing incomplete upload: {cleanup}");
@@ -181,7 +217,7 @@ impl AppState {
         let mut assets = self.assets.lock().await;
         if kind == VariantKind::Source && !assets.contains_key(&id) && assets.len() >= MAX_ASSETS {
             remove_upload_temp(&temp_path).await;
-            return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "workspace is limited to 10000 assets"));
+            return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "workspace is limited to 10000 assets"));
         }
         if let VariantKind::Proxy = kind {
             let Some(current) = assets.get(&id) else {
@@ -203,9 +239,9 @@ impl AppState {
                 created_target = true;
             }
             Ok(true) => {
-                if let Err(error) = tokio::fs::remove_file(&temp_path).await {
-                    return Err(ApiError::internal(error));
-                }
+                // Same bytes already stored; the temp copy is redundant. A NotFound here is fine;
+                // other removal failures are logged, not fatal — the variant below is still valid.
+                remove_upload_temp(&temp_path).await;
             }
             Err(error) => {
                 remove_upload_temp(&temp_path).await;
@@ -356,7 +392,13 @@ async fn download_variant(state: &AppState, id: &str, kind: VariantKind, headers
 
     let range = match headers.get(RANGE).and_then(|value| value.to_str().ok()) {
         Some(value) => {
-            Some(parse_range(value, variant.size).ok_or_else(|| ApiError::new(StatusCode::RANGE_NOT_SATISFIABLE, "requested byte range is invalid"))?)
+            let Some(parsed) = parse_range(value, variant.size) else {
+                // RFC 9110 §14.4: an unsatisfiable range should say so with `bytes */size`.
+                let mut response = (StatusCode::RANGE_NOT_SATISFIABLE, Json(serde_json::json!({"error": "requested byte range is invalid"}))).into_response();
+                response.headers_mut().insert(CONTENT_RANGE, HeaderValue::from_str(&format!("bytes */{}", variant.size)).map_err(ApiError::internal)?);
+                return Ok(response);
+            };
+            Some(parsed)
         }
         None => None,
     };
@@ -484,6 +526,36 @@ async fn remove_file_if_present(path: &Path, description: &str) {
     }
 }
 
+/// Remove files a crashed run left behind: leftover upload temps and data files the manifest no
+/// longer references. Called once at startup, when no upload can be in flight, so disk from
+/// interrupted uploads does not accumulate silently.
+async fn sweep_orphans(root: &Path, assets: &BTreeMap<String, AssetRecord>) {
+    let mut referenced = std::collections::HashSet::new();
+    for (id, asset) in assets {
+        referenced.insert(variant_path(root, id, "source", &asset.source.etag).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
+        if let Some(proxy) = &asset.proxy {
+            referenced.insert(variant_path(root, id, "proxy", &proxy.etag).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
+        }
+    }
+    let Ok(mut entries) = tokio::fs::read_dir(root).await else {
+        return;
+    };
+    let mut removed = 0usize;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stale_upload = name.starts_with(".upload-") && name.ends_with(".tmp");
+        let unreferenced = name.ends_with(".data") && !referenced.contains(&name);
+        let description = if stale_upload { "orphaned upload temp" } else { "unreferenced data file" };
+        if stale_upload || unreferenced {
+            remove_file_if_present(&entry.path(), description).await;
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        eprintln!("filmcraft-cloud: removed {removed} orphaned file(s) left by an interrupted run");
+    }
+}
+
 fn hex_digest(digest: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(digest.len().saturating_mul(2));
@@ -564,30 +636,40 @@ async fn write_manifest(root: &Path, assets: &BTreeMap<String, AssetRecord>) -> 
     Ok(())
 }
 
-fn parse_args() -> Result<(SocketAddr, PathBuf), String> {
+fn parse_args() -> Result<(SocketAddr, PathBuf, bool), String> {
     let mut address = "127.0.0.1:8766".parse::<SocketAddr>().map_err(|error| error.to_string())?;
     let mut data_dir = PathBuf::from("filmcraft-cloud-data");
-    let mut args = std::env::args().skip(1);
+    // `args_os` (not `args`): non-UTF-8 arguments become a clean error instead of a panic.
+    let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
+        let argument = argument.to_str().ok_or("arguments must be valid UTF-8 text")?.to_string();
         match argument.as_str() {
             "--listen" => {
                 let value = args.next().ok_or("--listen requires an address")?;
-                address = value.parse().map_err(|error| format!("invalid --listen address: {error}"))?;
+                address =
+                    value.to_str().ok_or("--listen requires a valid UTF-8 address")?.parse().map_err(|error| format!("invalid --listen address: {error}"))?;
             }
-            "--data-dir" => data_dir = PathBuf::from(args.next().ok_or("--data-dir requires a path")?),
-            "--help" | "-h" => return Err("usage: filmcraft-cloud [--listen 127.0.0.1:8766] [--data-dir PATH]".into()),
+            "--data-dir" => {
+                let value = args.next().ok_or("--data-dir requires a path")?;
+                data_dir = PathBuf::from(value.to_str().ok_or("--data-dir requires a valid UTF-8 path")?.to_string());
+            }
+            "--help" | "-h" => return Ok((address, data_dir, true)),
             other => return Err(format!("unknown option `{other}`")),
         }
     }
     if !address.ip().is_loopback() {
         return Err("the PoC backend only binds to a loopback address".into());
     }
-    Ok((address, data_dir))
+    Ok((address, data_dir, false))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let (address, data_dir) = parse_args().map_err(std::io::Error::other)?;
+    let (address, data_dir, help) = parse_args().map_err(std::io::Error::other)?;
+    if help {
+        println!("usage: filmcraft-cloud [--listen 127.0.0.1:8766] [--data-dir PATH]");
+        return Ok(());
+    }
     let state = AppState::open(data_dir.clone()).await?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     println!("FilmCraft cloud PoC: http://{address}/ (data: {})", data_dir.display());

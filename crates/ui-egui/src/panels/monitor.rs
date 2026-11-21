@@ -43,6 +43,11 @@ fn scrub_preview_scale(scale: f32, scrubbing: bool) -> f32 {
 }
 
 fn scrub_preview_request_due(ctx: &egui::Context, now: f64, scrubbing: bool) -> bool {
+    // Native builds never scrub-preview-gate (see `web_scrubbing`); skip the data-map write-lock
+    // and the per-frame cleanup of a key that was never set.
+    if !cfg!(target_arch = "wasm32") {
+        return true;
+    }
     let id = egui::Id::unique("web-scrub-preview-last-request");
     if !scrubbing {
         ctx.data_mut(|data| data.remove::<f64>(id));

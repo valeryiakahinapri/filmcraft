@@ -1,6 +1,6 @@
 //! Headless JavaScript API backed by an independent engine session.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,9 +12,12 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 const MAX_FILE_BYTES: usize = 512 << 20;
+/// Total bytes one bridge instance may register across its lifetime.
+const MAX_TOTAL_FILE_BYTES: usize = 1 << 30;
 const MAX_SCRIPT_BYTES: usize = 8 << 20;
 const MAX_SCRIPT_LINES: usize = 10_000;
 const MAX_IMPORT_FILES: u32 = 1_024;
+const MAX_PARAM_BYTES: usize = 16 << 20;
 
 thread_local! {
     static NEXT_BRIDGE_ID: Cell<u64> = const { Cell::new(1) };
@@ -22,12 +25,41 @@ thread_local! {
 
 /// A headless, in-memory FilmCraft session for JavaScript hosts.
 ///
-/// It has its own document and history; it does not operate on the visible editor session.
+/// It has its own document and history; it does not operate on the visible editor session. One
+/// operation runs at a time: a call made while an earlier call is still pending (its promise has
+/// not settled) rejects with an error instead of interleaving, so await each call. The bridge's
+/// files live under `/bridge/<id>/`, and `file.open`, `file.import`, `file.saveAs` and
+/// `file.exportMedia` accept only paths under that prefix. `probe` parses its bytes
+/// synchronously, so keep the input bounded.
 #[wasm_bindgen]
 pub struct FilmCraftBridge {
-    session: Session,
+    session: RefCell<Session>,
     prefix: String,
-    next_file_id: u64,
+    next_file_id: Cell<u64>,
+    registered: Cell<usize>,
+    busy: Cell<bool>,
+}
+
+/// Marks the bridge busy for the duration of one call and releases it on every exit path,
+/// so concurrent JavaScript calls reject cleanly instead of fighting over the session.
+struct BusyGuard<'a> {
+    busy: &'a Cell<bool>,
+}
+
+impl<'a> BusyGuard<'a> {
+    fn new(busy: &'a Cell<bool>) -> Result<Self, JsValue> {
+        if busy.get() {
+            return Err(js_error("another bridge operation is still running; await it before calling again"));
+        }
+        busy.set(true);
+        Ok(Self { busy })
+    }
+}
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.busy.set(false);
+    }
 }
 
 #[wasm_bindgen]
@@ -42,12 +74,19 @@ impl FilmCraftBridge {
         if id == 0 {
             return Err(js_error("bridge instance limit reached"));
         }
-        Ok(Self { session: Session::new(Arc::new(crate::fs::WebServices)), prefix: format!("/bridge/{id}"), next_file_id: 1 })
+        Ok(Self {
+            session: RefCell::new(Session::new(Arc::new(crate::fs::WebServices))),
+            prefix: format!("/bridge/{id}"),
+            next_file_id: Cell::new(1),
+            registered: Cell::new(0),
+            busy: Cell::new(false),
+        })
     }
 
     /// List commands using the same metadata and case-insensitive ID/label filter as the CLI.
-    pub fn commands(&mut self, filter: Option<String>) -> Result<JsValue, JsValue> {
-        let list = self.session.execute("command.list", json!({})).map_err(engine_error)?;
+    pub fn commands(&self, filter: Option<String>) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
+        let list = self.session.borrow_mut().execute("command.list", json!({})).map_err(engine_error)?;
         let needle = filter.unwrap_or_default().to_ascii_lowercase();
         let commands = list.as_array().ok_or_else(|| js_error("engine returned an invalid command list"))?;
         let filtered: Vec<Value> = commands
@@ -63,17 +102,19 @@ impl FilmCraftBridge {
     }
 
     /// Return the current command metadata for `id`.
-    pub fn describe(&mut self, id: String) -> Result<JsValue, JsValue> {
-        let list = self.session.execute("command.list", json!({})).map_err(engine_error)?;
+    pub fn describe(&self, id: String) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
+        let list = self.session.borrow_mut().execute("command.list", json!({})).map_err(engine_error)?;
         let command = list
             .as_array()
             .and_then(|commands| commands.iter().find(|command| command["id"] == id))
-            .ok_or_else(|| js_error(&format!("unknown command `{id}`")))?;
+            .ok_or_else(|| js_error(&format!("unknown command `{id}` (try the `commands` method to list ids)")))?;
         to_js(command)
     }
 
     /// Execute an engine command. Long exports wait for completion unless `params.wait` is false.
-    pub async fn execute(&mut self, id: String, params: JsValue) -> Result<JsValue, JsValue> {
+    pub async fn execute(&self, id: String, params: JsValue) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         let params = from_js(&params)?;
         let result = self.execute_value(&id, params).await?;
         to_js(&result)
@@ -83,16 +124,17 @@ impl FilmCraftBridge {
     ///
     /// Returns per-line results. Invalid lines and command errors are explicit in the result;
     /// execution stops at the first failure unless `keep_going` is true.
-    pub async fn run(&mut self, script: String, keep_going: bool) -> Result<JsValue, JsValue> {
+    pub async fn run(&self, script: String, keep_going: bool) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         if script.len() > MAX_SCRIPT_BYTES {
             return Err(js_error("script exceeds the 8 MiB limit"));
+        }
+        if script.lines().count() > MAX_SCRIPT_LINES {
+            return Err(js_error("script exceeds the 10000-line limit"));
         }
         let mut results = Vec::new();
         let mut failed = false;
         for (index, line) in script.lines().enumerate() {
-            if index >= MAX_SCRIPT_LINES {
-                return Err(js_error("script exceeds the 10000-line limit"));
-            }
             let line_number = index + 1;
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -133,23 +175,25 @@ impl FilmCraftBridge {
 
     /// Advance background engine jobs. Returns whether jobs remain.
     #[wasm_bindgen(js_name = pumpJobs)]
-    pub fn pump_jobs(&mut self, budget_ms: Option<u32>) -> Result<bool, JsValue> {
+    pub fn pump_jobs(&self, budget_ms: Option<u32>) -> Result<bool, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         let budget_ms = budget_ms.unwrap_or(20);
         if !(1..=100).contains(&budget_ms) {
             return Err(js_error("job budget must be between 1 and 100 milliseconds"));
         }
-        Ok(self.session.pump_jobs(Duration::from_millis(u64::from(budget_ms))))
+        Ok(self.session.borrow_mut().pump_jobs(Duration::from_millis(u64::from(budget_ms))))
     }
 
     /// Inspect the project, active sequence, or both (`all` by default).
-    pub fn inspect(&mut self, target: Option<String>) -> Result<JsValue, JsValue> {
+    pub fn inspect(&self, target: Option<String>) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         let target = target.as_deref().unwrap_or("all");
         let result = match target {
-            "project" => self.session.execute("project.inspect", json!({})),
-            "sequence" => self.session.execute("sequence.inspect", json!({})),
+            "project" => self.session.borrow_mut().execute("project.inspect", json!({})),
+            "sequence" => self.session.borrow_mut().execute("sequence.inspect", json!({})),
             "all" => {
-                let project = self.session.execute("project.inspect", json!({})).map_err(engine_error)?;
-                let sequence = self.session.execute("sequence.inspect", json!({})).map_err(engine_error)?;
+                let project = self.session.borrow_mut().execute("project.inspect", json!({})).map_err(engine_error)?;
+                let sequence = self.session.borrow_mut().execute("sequence.inspect", json!({})).map_err(engine_error)?;
                 Ok(json!({"project": project, "sequence": sequence}))
             }
             other => return Err(js_error(&format!("inspect: unknown `{other}` (project | sequence | all)"))),
@@ -159,23 +203,16 @@ impl FilmCraftBridge {
 
     /// Copy bytes into this bridge's virtual filesystem and return the virtual path.
     #[wasm_bindgen(js_name = registerFile)]
-    pub fn register_file(&mut self, name: String, bytes: js_sys::Uint8Array) -> Result<String, JsValue> {
-        let size = usize::try_from(bytes.length()).map_err(|_| js_error("file is too large"))?;
-        if size > MAX_FILE_BYTES {
-            return Err(js_error("in-memory bridge files are limited to 512 MiB"));
-        }
-        let id = self.next_file_id;
-        self.next_file_id = id.checked_add(1).ok_or_else(|| js_error("bridge file limit reached"))?;
-        let name = safe_file_name(&name);
-        let path = format!("{}/{id}-{name}", self.prefix);
-        crate::fs::put(&path, bytes.to_vec());
-        Ok(path)
+    pub fn register_file(&self, name: String, bytes: js_sys::Uint8Array) -> Result<String, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
+        self.register_file_inner(name, bytes)
     }
 
     /// Import one byte array into this bridge's project.
     #[wasm_bindgen(js_name = importFile)]
-    pub async fn import_file(&mut self, name: String, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
-        let path = self.register_file(name, bytes)?;
+    pub async fn import_file(&self, name: String, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
+        let path = self.register_file_inner(name, bytes)?;
         let mut result = self.execute_value("file.import", json!({"paths": [path]})).await?;
         result["path"] = json!(path);
         to_js(&result)
@@ -183,7 +220,8 @@ impl FilmCraftBridge {
 
     /// Import multiple byte arrays and return the CLI-style `{items, errors, paths}` result.
     #[wasm_bindgen(js_name = importFiles)]
-    pub async fn import_files(&mut self, files: js_sys::Array) -> Result<JsValue, JsValue> {
+    pub async fn import_files(&self, files: js_sys::Array) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         if files.length() > MAX_IMPORT_FILES {
             return Err(js_error("one import call is limited to 1024 files"));
         }
@@ -204,25 +242,26 @@ impl FilmCraftBridge {
 
         let mut paths = Vec::new();
         for (name, bytes) in inputs {
-            paths.push(self.register_file(name, bytes)?);
+            paths.push(self.register_file_inner(name, bytes)?);
         }
-        let result = self.execute_value("file.import", json!({"paths": paths})).await?;
-        let mut result = result;
+        let mut result = self.execute_value("file.import", json!({"paths": paths})).await?;
         result["paths"] = json!(paths);
         to_js(&result)
     }
 
     /// Open a project from bytes without using a host filesystem path.
     #[wasm_bindgen(js_name = openProject)]
-    pub async fn open_project(&mut self, name: String, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
-        let path = self.register_file(name, bytes)?;
+    pub async fn open_project(&self, name: String, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
+        let path = self.register_file_inner(name, bytes)?;
         let result = self.execute_value("file.open", json!({"path": path})).await?;
         to_js(&result)
     }
 
     /// Save the bridge's project into its virtual filesystem.
     #[wasm_bindgen(js_name = saveProject)]
-    pub async fn save_project(&mut self, name: String) -> Result<JsValue, JsValue> {
+    pub async fn save_project(&self, name: String) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         let path = self.virtual_path(&name)?;
         let result = self.execute_value("file.saveAs", json!({"path": path})).await?;
         to_js(&json!({"path": path, "result": result}))
@@ -230,16 +269,19 @@ impl FilmCraftBridge {
 
     /// Export the active sequence using the engine's full export command and settings schema.
     #[wasm_bindgen(js_name = exportMedia)]
-    pub async fn export_media(&mut self, params: JsValue) -> Result<JsValue, JsValue> {
+    pub async fn export_media(&self, params: JsValue) -> Result<JsValue, JsValue> {
+        let _busy = BusyGuard::new(&self.busy)?;
         let mut params = from_js(&params)?;
         if !params.is_object() {
             return Err(js_error("export parameters must be an object"));
         }
-        if params.get("path").and_then(Value::as_str).is_some_and(|path| !path.starts_with(&format!("{}/", self.prefix))) {
-            let path = params["path"].as_str().unwrap_or_default().to_owned();
-            params["path"] = json!(self.virtual_path(&path)?);
+        if let Some(path) = params.get("path").and_then(Value::as_str).map(str::to_owned) {
+            if !path.starts_with(&format!("{}/", self.prefix)) {
+                params["path"] = json!(self.virtual_path(&path)?);
+            }
         }
-        self.execute("file.exportMedia".into(), to_js(&params)?).await
+        let result = self.execute_value("file.exportMedia", params).await?;
+        to_js(&result)
     }
 
     /// Probe an in-memory media file and return the engine's shared media-info schema.
@@ -248,7 +290,7 @@ impl FilmCraftBridge {
         if size > MAX_FILE_BYTES {
             return Err(js_error("in-memory bridge files are limited to 512 MiB"));
         }
-        let info = filmcraft_codecs::probe_bytes(&safe_file_name(&name), bytes.to_vec().into()).map_err(engine_error)?;
+        let info = filmcraft_codecs::probe_bytes(&safe_file_name(&name), bytes.to_vec().into()).map_err(|error| js_error(&format!("{name}: {error}")))?;
         to_js(&info)
     }
 
@@ -355,7 +397,7 @@ impl FilmCraftBridge {
 
     /// Render the active Program frame as raw RGBA8 bytes.
     #[wasm_bindgen(js_name = renderFrame)]
-    pub fn render_frame(&mut self, seconds: Option<f64>, scale: Option<f32>) -> Result<JsValue, JsValue> {
+    pub fn render_frame(&self, seconds: Option<f64>, scale: Option<f32>) -> Result<JsValue, JsValue> {
         if let Some(seconds) = seconds
             && !seconds.is_finite()
         {
@@ -365,10 +407,15 @@ impl FilmCraftBridge {
         if !scale.is_finite() || scale <= 0.0 {
             return Err(js_error("scale must be finite and positive"));
         }
-        if let Some(seconds) = seconds {
-            self.session.set_playhead(filmcraft_engine::time::Tick::from_seconds_f64(seconds));
-        }
-        let (image, offline) = self.session.try_render_program_with_offline_at(scale, self.session.playhead()).map_err(engine_error)?;
+        let _busy = BusyGuard::new(&self.busy)?;
+        let (image, offline) = {
+            let mut session = self.session.borrow_mut();
+            if let Some(seconds) = seconds {
+                session.set_playhead(filmcraft_engine::time::Tick::from_seconds_f64(seconds));
+            }
+            let playhead = session.playhead();
+            session.try_render_program_with_offline_at(scale, playhead).map_err(engine_error)?
+        };
         let pixels = js_sys::Uint8Array::from(image.over_black_rgba8().as_slice());
         let result = to_js(&json!({
             "width": image.w,
@@ -401,7 +448,8 @@ impl FilmCraftBridge {
 }
 
 impl FilmCraftBridge {
-    async fn execute_value(&mut self, id: &str, mut params: Value) -> Result<Value, JsValue> {
+    async fn execute_value(&self, id: &str, mut params: Value) -> Result<Value, JsValue> {
+        self.check_command_paths(id, &params)?;
         let wait = id == "file.exportMedia" && params.get("wait").and_then(Value::as_bool) != Some(false);
         if wait {
             let Some(object) = params.as_object_mut() else {
@@ -409,18 +457,22 @@ impl FilmCraftBridge {
             };
             object.insert("wait".into(), Value::Bool(false));
         }
-        let result = self.session.execute(id, params).map_err(engine_error)?;
+        let result = self.session.borrow_mut().execute(id, params).map_err(engine_error)?;
         if !wait {
             return Ok(result);
         }
         let job = result["job"].as_u64().ok_or_else(|| js_error("export did not return a job id"))?;
         loop {
-            self.session.pump_jobs(Duration::from_millis(20));
-            let jobs = self.session.execute("jobs.list", json!({})).map_err(engine_error)?;
-            let entry = jobs.as_array().and_then(|jobs| jobs.iter().find(|entry| entry["id"].as_u64() == Some(job)));
-            if let Some(entry) = entry
-                && entry["finished"].as_bool() == Some(true)
-            {
+            let finished = {
+                let mut session = self.session.borrow_mut();
+                session.pump_jobs(Duration::from_millis(20));
+                let jobs = session.execute("jobs.list", json!({})).map_err(engine_error)?;
+                jobs.as_array()
+                    .and_then(|jobs| jobs.iter().find(|entry| entry["id"].as_u64() == Some(job)))
+                    .filter(|entry| entry["finished"].as_bool() == Some(true))
+                    .cloned()
+            };
+            if let Some(entry) = finished {
                 if let Some(error) = entry["result"]["error"].as_str() {
                     return Err(js_error(&format!("export failed: {error}")));
                 }
@@ -435,6 +487,49 @@ impl FilmCraftBridge {
             }
             yield_to_event_loop().await?;
         }
+    }
+
+    /// File commands that read or write through the virtual filesystem accept only paths inside
+    /// this bridge's prefix, so one bridge cannot reach another bridge's or the visible app's
+    /// files.
+    fn check_command_paths(&self, id: &str, params: &Value) -> Result<(), JsValue> {
+        let prefix = format!("{}/", self.prefix);
+        let check = |path: &str| {
+            if path.starts_with(&prefix) { Ok(()) } else { Err(js_error("path is outside this bridge's virtual filesystem")) }
+        };
+        match id {
+            "file.open" | "file.saveAs" | "file.exportMedia" => {
+                if let Some(path) = params.get("path").and_then(Value::as_str) {
+                    check(path)?;
+                }
+            }
+            "file.import" => {
+                if let Some(paths) = params.get("paths").and_then(Value::as_array) {
+                    for path in paths.iter().filter_map(Value::as_str) {
+                        check(path)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn register_file_inner(&self, name: String, bytes: js_sys::Uint8Array) -> Result<String, JsValue> {
+        let size = usize::try_from(bytes.length()).map_err(|_| js_error("file is too large"))?;
+        if size > MAX_FILE_BYTES {
+            return Err(js_error("in-memory bridge files are limited to 512 MiB"));
+        }
+        let Some(total) = self.registered.get().checked_add(size).filter(|total| *total <= MAX_TOTAL_FILE_BYTES) else {
+            return Err(js_error("registered bridge files are limited to 1 GiB in total"));
+        };
+        self.registered.set(total);
+        let id = self.next_file_id.get();
+        self.next_file_id.set(id.checked_add(1).ok_or_else(|| js_error("bridge file limit reached"))?);
+        let name = safe_file_name(&name);
+        let path = format!("{}/{id}-{name}", self.prefix);
+        crate::fs::put(&path, bytes.to_vec());
+        Ok(path)
     }
 
     fn virtual_path(&self, name: &str) -> Result<String, JsValue> {
@@ -465,6 +560,9 @@ fn from_js(value: &JsValue) -> Result<Value, JsValue> {
         return Ok(json!({}));
     }
     let encoded = js_sys::JSON::stringify(value)?.as_string().ok_or_else(|| js_error("parameters must be JSON serializable"))?;
+    if encoded.len() > MAX_PARAM_BYTES {
+        return Err(js_error("parameters exceed the 16 MiB limit"));
+    }
     serde_json::from_str(&encoded).map_err(|e| js_error(&format!("invalid JSON parameters: {e}")))
 }
 

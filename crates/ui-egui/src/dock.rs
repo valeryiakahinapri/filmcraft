@@ -271,9 +271,14 @@ impl LayoutPreset {
         }
         let focused =
             if layout.is_visible(ui.focused) { ui.focused } else { layout.visible_panels().first().copied().ok_or("current layout has no visible panel")? };
+        // Closed-float entries can outlive a workspace switch (which swaps the layout without
+        // pruning them); drop entries whose panel the current layout contains — the same
+        // sanitization `maximized` gets below — or the preset's own validation would reject a
+        // live UI state.
         let closed_floating = ui
             .closed_floating
             .iter()
+            .filter(|(panel, _)| !layout.contains(panel))
             .map(|(panel, rect)| Ok(ClosedFloatingPreset { panel: *panel, rect: relative_rect(*rect, viewport)? }))
             .collect::<Result<Vec<_>, String>>()?;
         let preset = Self {

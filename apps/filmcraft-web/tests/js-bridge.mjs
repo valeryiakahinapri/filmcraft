@@ -129,6 +129,25 @@ try {
   rmSync(probeDir, { recursive: true, force: true });
 }
 await assert.rejects(bridge.benchmarkDecode("short.wav", mediaBytes, 0), /between 1 and 10000/);
+assert.throws(() => bridge.pumpJobs(0), /between 1 and 100/);
+assert.throws(() => bridge.pumpJobs(101), /between 1 and 100/);
+await assert.rejects(bridge.run("#\n".repeat(10_001), false), /10000-line/);
+await assert.rejects(bridge.run("x".repeat((8 << 20) + 1), false), /8 MiB/);
+await assert.rejects(
+  bridge.execute("file.open", { path: "/files/outside.mp4" }),
+  /outside this bridge/,
+  "file commands are sandboxed to this bridge's virtual filesystem",
+);
+await assert.rejects(bridge.execute("file.import", { paths: ["/files/outside.mp4"] }), /outside this bridge/);
+await assert.rejects(
+  bridge.importFiles(new Array(1025).fill({ name: "a.wav", bytes: mediaBytes })),
+  /limited to 1024 files/,
+);
+await assert.rejects(
+  bridge.execute("project.inspect", { padding: "x".repeat(17 << 20) }),
+  /16 MiB/,
+  "oversized parameters are rejected before deserializing",
+);
 function bmpFrame(r, g, b) {
   const bytes = Buffer.alloc(58);
   bytes.write("BM", 0);
@@ -175,4 +194,14 @@ assert.equal(reopened.files().length, 1);
 assert.throws(() => reopened.readFile(saved.path), /outside this bridge/);
 assert.equal(reopened.pumpJobs(20), false);
 
-console.log("JS bridge: CLI command parity, run, errors, render, batch import, media probes, export, and project round-trip passed");
+// One operation at a time: a call while an export is still pending rejects cleanly instead of
+// interleaving. A 30-second matte guarantees the first 20 ms pump cannot finish the export.
+const busyMatte = await bridge.execute("file.newColorMatte", { seconds: 30, color: "#345678" });
+await bridge.execute("file.newSequence", { name: "Busy export", fromItem: busyMatte.item, width: 64, height: 36 });
+await bridge.execute("timeline.place", { item: busyMatte.item, time: 0 });
+const slowExport = bridge.exportMedia({ format: "h264", path: "busy.mp4", range: "custom", startSeconds: 0, endSeconds: 30, audio: false });
+assert.throws(() => bridge.inspect("project"), /still running/);
+await slowExport;
+assert.equal(bridge.pumpJobs(20), false, "the busy flag is released when the operation settles");
+
+console.log("JS bridge: CLI command parity, run, errors, limits, concurrency, render, batch import, media probes, export, and project round-trip passed");

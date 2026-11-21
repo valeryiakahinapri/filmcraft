@@ -35,3 +35,9 @@ symphonia = { version = "0.5.5", default-features = false, features = ["aac", "m
 filmcraft-testkit = { workspace = true }
 serde_json = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+# The workspace keeps craft-video's `threads` (its rayon pool) off the default feature set so the
+# single-threaded wasm32 build cannot pull it in; native builds re-enable it here (see also
+# `crates/export`), so building or testing this crate alone still decodes and encodes in parallel.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-video = { workspace = true, features = ["threads"] }

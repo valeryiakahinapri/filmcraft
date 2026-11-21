@@ -507,5 +507,11 @@ fn about_tab(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     link(ui, "github", Icon::Code, tl!("Source code on GitHub"), links::GITHUB, false);
     link(ui, "reportIssue", Icon::Code, tl!("Report an issue"), links::ISSUES, false);
     ui.add_space(10.0);
-    ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Fonts: Inter, Noto Serif and JetBrains Mono (SIL OFL 1.1).")).small().color(t.text_dim));
+    // Native builds also bundle Noto Serif; the web build leaves it out to keep downloads small.
+    let fonts = if cfg!(target_arch = "wasm32") {
+        tl!("MIT OR Apache-2.0. Fonts: Inter and JetBrains Mono (SIL OFL 1.1).")
+    } else {
+        tl!("MIT OR Apache-2.0. Fonts: Inter, Noto Serif and JetBrains Mono (SIL OFL 1.1).")
+    };
+    ui.label(egui::RichText::new(fonts).small().color(t.text_dim));
 }

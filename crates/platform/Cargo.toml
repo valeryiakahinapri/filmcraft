@@ -66,3 +66,8 @@ filmcraft-media = { workspace = true }
 filmcraft-frame = { workspace = true }
 filmcraft-project = { workspace = true }
 filmcraft-render = { workspace = true }
+
+# Mirror of `crates/export`'s target-specific `threads` re-enable: native builds keep craft-video's
+# rayon pool even when this crate is built in isolation.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-video = { workspace = true, features = ["threads"] }

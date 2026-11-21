@@ -1264,18 +1264,21 @@ fn web_menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     let labels = app.session.prefs.labels.clone();
     let ctx = ui.ctx().clone();
     let t = app.tokens;
+    // One translated string for the button's accessible label, its tooltip and the automation
+    // registry, so a non-English language does not leave them diverging on "Menu".
+    let menu = tl!("Menu");
     let response = ui
         .add_sized(
             vec2(30.0, 30.0),
-            egui::Button::new(egui::RichText::new("Menu").size(1.0).color(Color32::TRANSPARENT)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE),
+            egui::Button::new(egui::RichText::new(menu).size(1.0).color(Color32::TRANSPARENT)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE),
         )
-        .on_hover_text(tl!("Menu"));
+        .on_hover_text(menu);
     if response.hovered() {
         ui.painter().rect_filled(response.rect, t.radius_sm, t.hover);
     }
     // Keep an accessible label in the widget while drawing the established vector icon.
     crate::icons::paint(ui.painter(), response.rect.shrink(7.0), crate::icons::Icon::Hamburger, if response.hovered() { t.text } else { t.text_dim });
-    app.auto.add("header.menu", response.rect, "Menu");
+    app.auto.add("header.menu", response.rect, menu);
 
     let mut clicked: Option<String> = None;
     egui::Popup::menu(&response).width(240.0).show(|ui| {
@@ -1694,5 +1697,37 @@ mod tests {
         harness.get_by_label("New").hover();
         harness.run_steps(3);
         assert!(harness.query_by_label_contains("Color Matte…").is_some(), "nested New submenu did not cascade");
+    }
+
+    #[test]
+    fn web_menu_keyboard_open_submenu_and_escape_close() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu_bar(app, ui), app);
+        crate::theme::install(&harness.ctx, &harness.state().tokens);
+        harness.run_steps(3);
+
+        // Keyboard only: focus the hamburger and activate it with Space (a focused egui button
+        // reports `clicked` on Space), then open the File submenu the same way.
+        harness.get_by_label("Menu").focus();
+        harness.run_steps(2);
+        harness.key_press(egui::Key::Space);
+        harness.run_steps(3);
+        assert!(harness.query_by_label("File").is_some(), "Space on the focused hamburger must open the menu");
+
+        harness.get_by_label("File").focus();
+        harness.run_steps(2);
+        harness.key_press(egui::Key::Space);
+        harness.run_steps(3);
+        assert!(harness.query_by_label("New").is_some(), "Space on the focused File item must open the submenu");
+
+        // Escape closes the open levels; no focus trap keeps the keyboard inside the menu.
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(3);
+        assert!(harness.query_by_label("New").is_none(), "Escape must close the submenu");
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(3);
+        assert!(harness.query_by_label("File").is_none(), "Escape must close the whole menu");
     }
 }

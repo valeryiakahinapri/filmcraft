@@ -140,7 +140,9 @@ safe removal candidates without further call-graph and feature analysis.
 While dragging the Timeline playhead, the browser requests preview frames no more often than 15 fps
 and caps their resolution at one half. It gives each cooperative frame-pump pass a 6 ms budget so
 input and painting can proceed; on release it immediately requests the normal paused resolution. Audio
-scrubbing is disabled in the browser to avoid mixing audio on the UI thread while dragging.
+scrubbing is disabled in the browser to avoid mixing audio on the UI thread while dragging. These
+caps key on the Timeline scrub drag; the Program monitor's own scrub bar and timecode drags are
+covered by the pump budget but not the 15 fps / half-scale caps.
 The optional Noto Serif face is not bundled for the web; unknown or unavailable families fall back
 to Inter, while native builds retain all bundled fonts.
 

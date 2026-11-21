@@ -3,11 +3,17 @@ AddType application/wasm .wasm
 AddType text/javascript .js
 
 <IfModule mod_deflate.c>
+  # Compress on the fly; when you instead serve precompressed `.wasm.br` files (see HOSTING.md),
+  # exclude them from this filter so the bytes are not double-encoded.
   AddOutputFilterByType DEFLATE application/wasm text/javascript text/html
 </IfModule>
 
 <IfModule mod_headers.c>
   <FilesMatch "\.(wasm|js)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  # Precompressed sibling files (see HOSTING.md): same caching as the raw assets.
+  <FilesMatch "\.wasm\.br$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
   <FilesMatch "^index\.html$">

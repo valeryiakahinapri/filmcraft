@@ -703,10 +703,17 @@ impl Session {
                 Ok(filmcraft_export::Step::Progress) => {}
                 Ok(filmcraft_export::Step::Pending) => return true,
                 Ok(filmcraft_export::Step::Done(r)) => {
+                    // The stepped (wasm) path has no thread closure to record the offline-media
+                    // slates, so `jobs.list`/`file.exportMedia` results would always report an
+                    // empty `offlineMedia` (CLI parity); record them like the native path does.
+                    let offline = self.export_offline.entry(j.job).or_default().clone();
+                    *offline.lock().unwrap_or_else(|e| e.into_inner()) = j.provider.offline_used();
                     *j.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(Ok(r));
                     self.stepped.remove(0);
                 }
                 Err(e) => {
+                    let offline = self.export_offline.entry(j.job).or_default().clone();
+                    *offline.lock().unwrap_or_else(|x| x.into_inner()) = j.provider.offline_used();
                     let e = e.to_string();
                     *j.progress.error.lock().unwrap_or_else(|x| x.into_inner()) = Some(e.clone());
                     j.progress.finished.store(true, std::sync::atomic::Ordering::Relaxed);

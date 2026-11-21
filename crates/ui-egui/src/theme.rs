@@ -472,12 +472,12 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
     v.hyperlink_color = t.accent;
     v.window_stroke = Stroke::new(1.0, t.field_border);
-    v.window_corner_radius = egui::CornerRadius::same(t.radius as u8);
-    v.menu_corner_radius = egui::CornerRadius::same(t.radius as u8);
+    v.window_corner_radius = egui::CornerRadius::same(t.radius.clamp(0.0, 255.0) as u8);
+    v.menu_corner_radius = egui::CornerRadius::same(t.radius.clamp(0.0, 255.0) as u8);
     v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(140) };
     v.window_shadow = v.popup_shadow;
     for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
-        w.corner_radius = egui::CornerRadius::same(t.radius_sm as u8);
+        w.corner_radius = egui::CornerRadius::same(t.radius_sm.clamp(0.0, 255.0) as u8);
     }
     v.widgets.noninteractive.bg_fill = t.panel_bg;
     v.widgets.noninteractive.weak_bg_fill = t.panel_bg;

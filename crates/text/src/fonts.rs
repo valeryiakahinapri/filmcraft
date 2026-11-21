@@ -22,6 +22,10 @@ pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-S
 pub static INTER_BOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-Bold.ttf");
 pub static INTER_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/Inter-Italic.ttf");
 pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+/// Noto Serif is an optional desktop face; the static itself is native-only so the web build
+/// cannot link the 472 KB TTF back into the WASM artifact (the download saving is guaranteed,
+/// not left to the linker dropping an unreferenced section).
+#[cfg(not(target_arch = "wasm32"))]
 pub static NOTO_SERIF_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/NotoSerif-Regular.ttf");
 
 /// Noto Serif is an optional desktop face; omitting it keeps browser downloads smaller.

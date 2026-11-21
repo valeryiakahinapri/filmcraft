@@ -385,7 +385,12 @@ impl Services for WebServices {
             fs.entries.insert(path.to_string(), Entry::Mem(Arc::from(data)));
             fs.on_write.clone()
         });
+        // Files under `/bridge/` belong to a headless `FilmCraftBridge` session: keep them in the
+        // virtual file table (the bridge reads them back with `readFile`) but never offer them as
+        // browser downloads or hand them to an embedding host — only the visible app's own writes
+        // go to `on_write`.
         if !path.starts_with("/opfs/")
+            && !path.starts_with("/bridge/")
             && let Some(h) = hook
         {
             h(path, data);
@@ -405,7 +410,10 @@ impl Services for WebServices {
             fs.entries.insert(path.to_owned(), Entry::Mem(Arc::from(data)));
             Ok(fs.on_write.clone())
         })?;
-        if let Some(h) = hook {
+        // Same headless-bridge rule as `write_file`: `/bridge/` writes stay in the file table.
+        if !path.starts_with("/bridge/")
+            && let Some(h) = hook
+        {
             h(path, data);
         }
         Ok(())

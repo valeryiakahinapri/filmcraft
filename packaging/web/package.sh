@@ -36,6 +36,16 @@ WORK="$CARGO_TARGET_DIR/web-package"
 rm -rf "$WORK"
 mkdir -p "$WORK/$NAME"
 cp -R "$SITE/." "$WORK/$NAME/"
+# Precompress the WASM for hosts that serve sibling .br files directly (Netlify, Cloudflare Pages
+# with Brotli, nginx `brotli_static on`): quality 11 with the 16 MiB window reaches the smallest
+# measured HTTP transfer for this build. Skipped (with a note) when the CLI is absent.
+if command -v brotli >/dev/null; then
+  brotli -q 11 --lgwin 24 -k "$WORK/$NAME/filmcraft_web_bg.wasm"
+  echo "precompressed $NAME/filmcraft_web_bg.wasm.br:"
+  ls -lh "$WORK/$NAME/filmcraft_web_bg.wasm.br"
+else
+  echo "note: brotli not found; the zip ships without a precompressed filmcraft_web_bg.wasm.br" >&2
+fi
 # Sample server configs (MIME type, caching, compression); harmless where unused.
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"
 cp "$HERE/README.md" "$WORK/$NAME/HOSTING.md"

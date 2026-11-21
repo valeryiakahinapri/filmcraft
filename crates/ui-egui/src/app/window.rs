@@ -59,6 +59,9 @@ impl FilmcraftApp {
     pub fn set_workspace(&mut self, name: &str) {
         self.ui.workspace = name.to_string();
         self.ui.dock = dock::saved_docking(&self.workspaces, name);
+        // Closed-float entries refer to the previous layout; keep only the ones the new layout
+        // does not contain, so they cannot go stale (`ui.layout.export` validates them).
+        self.ui.closed_floating.retain(|(panel, _)| !self.ui.dock.contains(panel));
         self.pending_panel_raise = None;
         self.ui.keys.maximized = None;
         if self.workspaces.current != name {

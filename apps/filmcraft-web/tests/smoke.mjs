@@ -197,9 +197,18 @@ try {
   const ex = await js(`filmcraft.execute("file.exportMedia", {format: "h264", path: "/exports/web-export.mp4", bitrateKbps: 4000})`);
   const te = Date.now();
   await until(`filmcraft.execute("jobs.list").then(js => js.some(j => j.id === ${ex.job} && j.finished))`, 300000, 250);
-  report.steps.export = { job: ex.job, ms: Date.now() - te, jobs: await js("filmcraft.execute('jobs.list')"), files: await js("filmcraft.files()") };
+  const jobs = await js("filmcraft.execute('jobs.list')");
+  const job = jobs.find((j) => j.id === ex.job);
+  if (!job) throw new Error("export job is missing from jobs.list");
+  if (job.result && job.result.error) throw new Error("export job failed: " + JSON.stringify(job.result.error));
+  if (!Array.isArray(job.offlineMedia)) throw new Error("export job has no offlineMedia list");
+  const exFiles = await js("filmcraft.files()");
+  const exportedFile = exFiles.find((f) => f.path === "/exports/web-export.mp4");
+  if (!exportedFile || exportedFile.size <= 4) throw new Error("browser H.264 export produced no file bytes");
+  report.steps.export = { job: ex.job, ms: Date.now() - te, jobs, files: exFiles };
   await sleep(1000);
   report.steps.export.downloads = readdirSync(downloads).filter((f) => !f.endsWith(".crdownload")).map((f) => ({ f, bytes: statSync(join(downloads, f)).size }));
+  if (!report.steps.export.downloads.some((f) => f.bytes > 4)) throw new Error("the export was not offered as a browser download");
   report.steps.export.screenshot = await shot("04-exported");
 
   // every top-level mode and a tiny window: these used to panic (temp_dir in Export mode, a dock

@@ -10,6 +10,10 @@ use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8766";
 const ASSETS_PATH: &str = "/api/v1/assets";
+/// Matches the server's per-upload cap, applied to manifest entries here as a sanity bound.
+const MAX_ASSET_BYTES: u64 = 8 << 30;
+/// Matches the server's manifest cap; JSON responses above it are refused before parsing.
+const MAX_MANIFEST_BYTES: usize = 16 << 20;
 
 thread_local! {
     static BASE_URL: RefCell<String> = const { RefCell::new(String::new()) };
@@ -53,6 +57,9 @@ pub fn install(filmcraft: &js_sys::Object) -> Result<(), JsValue> {
             let origin = url.origin();
             if origin == "null" {
                 return Err(js_error("cloud base URL must have a valid origin"));
+            }
+            if !is_loopback_origin(&origin) {
+                log::warn!("cloud workspace origin {origin} is not loopback; the PoC server is loopback-only");
             }
             BASE_URL.with(|value| *value.borrow_mut() = origin.clone());
             js_sys::JSON::parse(&serde_json::to_string(&json!({"baseUrl": origin})).map_err(|e| js_error(&e.to_string()))?)
@@ -133,7 +140,32 @@ pub fn install(filmcraft: &js_sys::Object) -> Result<(), JsValue> {
 async fn list_assets() -> Result<Vec<Asset>, JsValue> {
     let response = fetch(&format!("{}{ASSETS_PATH}", base_url()), &web_sys::RequestInit::new()).await?;
     let value = response_value(response).await?;
-    serde_json::from_value(value).map_err(|error| js_error(&format!("invalid cloud asset list: {error}")))
+    let assets: Vec<Asset> = serde_json::from_value(value).map_err(|error| js_error(&format!("invalid cloud asset list: {error}")))?;
+    // The configured origin's manifest is untrusted input: bound it before its etags reach OPFS
+    // paths (`proxy_file_name`) or its sizes reach import decisions.
+    for asset in &assets {
+        validate_asset(asset)?;
+    }
+    Ok(assets)
+}
+
+/// Validate one manifest entry against the same shapes the server enforces.
+fn validate_asset(asset: &Asset) -> Result<(), JsValue> {
+    validate_id(&asset.id)?;
+    if !valid_etag(&asset.source.etag) || asset.source.size > MAX_ASSET_BYTES {
+        return Err(js_error("cloud asset list contains invalid source metadata"));
+    }
+    if let Some(proxy) = &asset.proxy {
+        if !valid_etag(&proxy.etag) || proxy.size > MAX_ASSET_BYTES || proxy.source_etag.as_deref().is_some_and(|etag| !valid_etag(etag)) {
+            return Err(js_error("cloud asset list contains invalid proxy metadata"));
+        }
+    }
+    Ok(())
+}
+
+/// `sha256-<64 ascii hex>`, like the server's manifest validation.
+fn valid_etag(etag: &str) -> bool {
+    etag.strip_prefix("sha256-").is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 async fn import_asset(id: &str, options: &JsValue) -> Result<JsValue, JsValue> {
@@ -237,7 +269,15 @@ async fn blob_from_response(response: web_sys::Response, expected_etag: &str) ->
 
 async fn response_value(response: web_sys::Response) -> Result<Value, JsValue> {
     check_response(&response).await?;
+    if let Some(length) = response.headers().get("content-length")?.and_then(|value| value.parse::<u64>().ok())
+        && length > MAX_MANIFEST_BYTES as u64
+    {
+        return Err(js_error("cloud response exceeds the 16 MiB manifest limit"));
+    }
     let text = JsFuture::from(response.text()?).await?.as_string().ok_or_else(|| js_error("cloud response was not text"))?;
+    if text.len() > MAX_MANIFEST_BYTES {
+        return Err(js_error("cloud response exceeds the 16 MiB manifest limit"));
+    }
     serde_json::from_str(&text).map_err(|error| js_error(&format!("invalid cloud response JSON: {error}")))
 }
 
@@ -277,6 +317,15 @@ fn validate_id(id: &str) -> Result<(), JsValue> {
         return Err(js_error("asset id must contain 1–96 ASCII letters, digits, hyphens, or underscores"));
     }
     Ok(())
+}
+
+/// The PoC server binds loopback only; a host page can still point the client at any origin,
+/// and that origin then controls the workspace manifest and file bytes, so warn when it is
+/// not loopback.
+fn is_loopback_origin(origin: &str) -> bool {
+    let Ok(url) = web_sys::Url::new(origin) else { return false };
+    let host = url.hostname();
+    matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]") || host.starts_with("127.")
 }
 
 fn proxy_file_name(asset: &Asset) -> String {
