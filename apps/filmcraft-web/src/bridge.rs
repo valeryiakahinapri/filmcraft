@@ -28,8 +28,9 @@ thread_local! {
 /// It has its own document and history; it does not operate on the visible editor session. One
 /// operation runs at a time: a call made while an earlier call is still pending (its promise has
 /// not settled) rejects with an error instead of interleaving, so await each call. The bridge's
-/// files live under `/bridge/<id>/`, and `file.open`, `file.import`, `file.saveAs` and
-/// `file.exportMedia` accept only paths under that prefix. `probe` parses its bytes
+/// session runs on [`BridgeServices`], which confines every file operation — whatever engine
+/// command supplies the path — to this bridge's `/bridge/<id>/` subtree, so one bridge can
+/// never reach the visible app's or another bridge's files. `probe` parses its bytes
 /// synchronously, so keep the input bounded.
 #[wasm_bindgen]
 pub struct FilmCraftBridge {
@@ -75,7 +76,7 @@ impl FilmCraftBridge {
             return Err(js_error("bridge instance limit reached"));
         }
         Ok(Self {
-            session: RefCell::new(Session::new(Arc::new(crate::fs::WebServices))),
+            session: RefCell::new(Session::new(Arc::new(BridgeServices { prefix: format!("/bridge/{id}/") }))),
             prefix: format!("/bridge/{id}"),
             next_file_id: Cell::new(1),
             registered: Cell::new(0),
@@ -449,7 +450,6 @@ impl FilmCraftBridge {
 
 impl FilmCraftBridge {
     async fn execute_value(&self, id: &str, mut params: Value) -> Result<Value, JsValue> {
-        self.check_command_paths(id, &params)?;
         let wait = id == "file.exportMedia" && params.get("wait").and_then(Value::as_bool) != Some(false);
         if wait {
             let Some(object) = params.as_object_mut() else {
@@ -489,50 +489,6 @@ impl FilmCraftBridge {
         }
     }
 
-    /// File commands that read or write through the virtual filesystem accept only paths inside
-    /// this bridge's prefix, so one bridge cannot reach another bridge's or the visible app's
-    /// files.
-    fn check_command_paths(&self, id: &str, params: &Value) -> Result<(), JsValue> {
-        // Every engine command that reads or writes through the virtual filesystem — opens,
-        // saves, copies, imports (incl. AAF), exports (media, interchange, EDL/FCP XML/OTIO,
-        // AAF/OMF), marker CSV, and proxy attachment — is sandboxed to this bridge's prefix, so
-        // one bridge cannot reach another bridge's or the visible app's files.
-        const PATH_COMMANDS: &[&str] = &[
-            "file.open",
-            "file.save",
-            "file.saveAs",
-            "file.saveCopy",
-            "file.import",
-            "file.importAaf",
-            "file.exportMedia",
-            "file.exportInterchange",
-            "file.exportEdl",
-            "file.exportFcp7Xml",
-            "file.exportFcpxml",
-            "file.exportOtio",
-            "file.exportAaf",
-            "file.exportOmf",
-            "markers.exportCsv",
-            "media.attachProxies",
-        ];
-        if !PATH_COMMANDS.contains(&id) {
-            return Ok(());
-        }
-        let prefix = format!("{}/", self.prefix);
-        let check = |path: &str| {
-            if path.starts_with(&prefix) { Ok(()) } else { Err(js_error("path is outside this bridge's virtual filesystem")) }
-        };
-        if let Some(path) = params.get("path").and_then(Value::as_str) {
-            check(path)?;
-        }
-        if let Some(paths) = params.get("paths").and_then(Value::as_array) {
-            for path in paths.iter().filter_map(Value::as_str) {
-                check(path)?;
-            }
-        }
-        Ok(())
-    }
-
     fn register_file_inner(&self, name: String, bytes: js_sys::Uint8Array) -> Result<String, JsValue> {
         let size = usize::try_from(bytes.length()).map_err(|_| js_error("file is too large"))?;
         if size > MAX_FILE_BYTES {
@@ -565,6 +521,92 @@ impl FilmCraftBridge {
 impl Drop for FilmCraftBridge {
     fn drop(&mut self) {
         crate::fs::remove_prefix(&format!("{}/", self.prefix));
+    }
+}
+
+/// The bridge session's `Services`: the shared web services, but every path is confined to
+/// this bridge's `/bridge/<id>/` subtree — whatever engine command supplies it (reads, writes,
+/// listings, media readers) — so a bridge can never reach the visible app's or another
+/// bridge's files, and its engine writes can never fire the app's download/host hook (writes
+/// under `/bridge/` are already exempt from that hook; writes anywhere else are refused here).
+/// The Media Browser's roots follow: no volumes, and the "home" directory is the bridge's own
+/// tree.
+struct BridgeServices {
+    prefix: String,
+}
+
+impl BridgeServices {
+    fn guard(&self, path: &str) -> std::io::Result<()> {
+        if path.starts_with(&self.prefix) {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "path is outside this bridge's virtual filesystem"))
+        }
+    }
+}
+
+impl filmcraft_engine::Services for BridgeServices {
+    fn read_file(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        self.guard(path)?;
+        crate::fs::WebServices.read_file(path)
+    }
+
+    fn read_file_bounded(&self, path: &str, max: u64) -> std::io::Result<Vec<u8>> {
+        self.guard(path)?;
+        crate::fs::WebServices.read_file_bounded(path, max)
+    }
+
+    fn write_file(&self, path: &str, data: &[u8]) -> std::io::Result<()> {
+        self.guard(path)?;
+        crate::fs::WebServices.write_file(path, data)
+    }
+
+    fn write_file_new(&self, path: &str, data: &[u8]) -> std::io::Result<()> {
+        self.guard(path)?;
+        crate::fs::WebServices.write_file_new(path, data)
+    }
+
+    fn file_size(&self, path: &str) -> std::io::Result<u64> {
+        self.guard(path)?;
+        crate::fs::WebServices.file_size(path)
+    }
+
+    fn read_range(&self, path: &str, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        self.guard(path)?;
+        crate::fs::WebServices.read_range(path, offset, len)
+    }
+
+    fn reader(&self, path: &str) -> Option<std::io::Result<filmcraft_media::SharedReader>> {
+        match self.guard(path) {
+            Ok(()) => crate::fs::WebServices.reader(path),
+            Err(error) => Some(Err(error)),
+        }
+    }
+
+    fn list_dir(&self, dir: &str) -> Option<std::io::Result<Vec<String>>> {
+        match self.guard(dir) {
+            Ok(()) => crate::fs::WebServices.list_dir(dir),
+            Err(error) => Some(Err(error)),
+        }
+    }
+
+    fn export_in_memory(&self) -> bool {
+        crate::fs::WebServices.export_in_memory()
+    }
+
+    fn list_entries(&self, dir: &str) -> Option<std::io::Result<Vec<filmcraft_engine::media_browser::DirEntry>>> {
+        match self.guard(dir) {
+            Ok(()) => crate::fs::WebServices.list_entries(dir),
+            Err(error) => Some(Err(error)),
+        }
+    }
+
+    fn volumes(&self) -> Vec<filmcraft_engine::media_browser::Volume> {
+        Vec::new()
+    }
+
+    fn home_dir(&self) -> Option<String> {
+        Some(self.prefix.clone())
     }
 }
 

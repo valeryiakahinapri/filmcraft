@@ -479,6 +479,9 @@ mod tests {
 
     /// The off-screen instance reads wgpu's flag variables, as the window's does, and keeps its
     /// own backends whatever `WGPU_BACKEND` says (#4084). Run in a child process, which has them set.
+    /// `native_descriptor` is native-only (the web build has no off-screen render instance), so a
+    /// wasm32 test build skips this.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     #[test]
     fn native_descriptor_reads_wgpu_flags_but_keeps_its_backends() {
         const CHILD: &str = "FILMCRAFT_TEST_NATIVE_DESCRIPTOR_CHILD";

@@ -12,6 +12,12 @@ AddType text/javascript .js
   <FilesMatch "\.(wasm|js)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
+  # The worklet and the wasm-bindgen/eframe snippet files carry no build hash in their URLs, so
+  # they must be revalidated like index.html, not cached immutably. These later rules override
+  # the general one above for the same header.
+  <FilesMatch "^(audio-worklet\.js|inline[0-9]+\.js)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
   # Precompressed sibling files (see HOSTING.md): same caching as the raw assets.
   <FilesMatch "\.wasm\.br$">
     Header set Cache-Control "public, max-age=31536000, immutable"

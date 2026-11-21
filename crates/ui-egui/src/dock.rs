@@ -1083,9 +1083,7 @@ mod tests {
 
     #[test]
     fn layout_preset_round_trip_preserves_folded_groups_and_scales_floating_panels() {
-        let mut ui = crate::state::UiState::default();
-        ui.workspace = "Editing".into();
-        ui.focused = PanelKind::Project;
+        let mut ui = crate::state::UiState { workspace: "Editing".into(), focused: PanelKind::Project, ..Default::default() };
         ui.keys.maximized = Some(PanelKind::Timeline);
         ui.effect_controls_split = 240.0;
         ui.expanded_fx = vec!["Video Transitions".into()];

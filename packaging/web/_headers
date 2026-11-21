@@ -15,5 +15,13 @@
 /*.js
   Cache-Control: public, max-age=31536000, immutable
 
+# The worklet and the wasm-bindgen/eframe snippet files carry no build hash in their URLs, so
+# unlike filmcraft_web.js they must not be cached immutably: revalidate them like index.html.
+/audio-worklet.js
+  Cache-Control: no-cache
+
+/snippets/*
+  Cache-Control: no-cache
+
 /index.html
   Cache-Control: no-cache

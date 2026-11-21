@@ -43,8 +43,10 @@ forever. Only `index.html` needs revalidation.
   extra rule; nginx can use `brotli_static on`. Apache needs `mod_brotli` or an explicit rewrite for
   `.wasm.br`. Keep the raw `.wasm` published as the fallback for clients that do not send
   `Accept-Encoding: br`.
-- **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the `.wasm` and `.js`
-  files (their URLs carry the build hash), and `no-cache` on `index.html`. `index.html` must not
+- **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the version-hashed
+  assets — the `.wasm` and `filmcraft_web.js`, whose URLs `index.html` loads with `?v=<build
+  hash>` — and `no-cache` on `index.html` and on the files whose URLs carry no hash
+  (`audio-worklet.js` and the wasm-bindgen/eframe snippet files). `index.html` must not
   be cached, or a browser can pair an old page with new files.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. The app does not fall back to WebGL2 or CPU rendering when WebGPU is

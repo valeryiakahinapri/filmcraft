@@ -139,7 +139,7 @@ await assert.rejects(
   "file commands are sandboxed to this bridge's virtual filesystem",
 );
 await assert.rejects(bridge.execute("file.import", { paths: ["/files/outside.mp4"] }), /outside this bridge/);
-await assert.rejects(bridge.execute("file.saveCopy", { path: "/files/outside.fcproj" }), /outside this bridge/, "the sandbox covers every path-taking command");
+await assert.rejects(bridge.execute("file.saveCopy", { path: "/files/outside.fcproj" }), /outside this bridge/, "the session's file IO is confined to this bridge's tree, whatever the command");
 await assert.rejects(
   bridge.importFiles(new Array(1025).fill({ name: "a.wav", bytes: mediaBytes })),
   /limited to 1024 files/,
@@ -196,11 +196,13 @@ assert.throws(() => reopened.readFile(saved.path), /outside this bridge/);
 assert.equal(reopened.pumpJobs(20), false);
 
 // One operation at a time: a call while an export is still pending rejects cleanly instead of
-// interleaving. A 30-second matte guarantees the first 20 ms pump cannot finish the export.
+// interleaving. A 30-second matte guarantees the export cannot finish while we check. The wasm
+// future starts on the microtask queue, so give it a real tick before asserting the busy state.
 const busyMatte = await bridge.execute("file.newColorMatte", { seconds: 30, color: "#345678" });
 await bridge.execute("file.newSequence", { name: "Busy export", fromItem: busyMatte.item, width: 64, height: 36 });
 await bridge.execute("timeline.place", { item: busyMatte.item, time: 0 });
 const slowExport = bridge.exportMedia({ format: "h264", path: "busy.mp4", range: "custom", startSeconds: 0, endSeconds: 30, audio: false });
+await new Promise((resolve) => setTimeout(resolve, 10));
 assert.throws(() => bridge.inspect("project"), /still running/);
 await slowExport;
 assert.equal(bridge.pumpJobs(20), false, "the busy flag is released when the operation settles");

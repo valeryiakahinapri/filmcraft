@@ -20,9 +20,16 @@ mod tests {
         assert!(!f[0].italic);
         let i = read_faces_bytes(crate::fonts::INTER_ITALIC);
         assert!(i[0].italic, "{:?}", i[0]);
+        assert!(read_faces_bytes(b"not a font").is_empty());
+    }
+
+    /// Noto Serif is a native-only face (the web build leaves it out to stay small), so this
+    /// check cannot run for a wasm32 test build.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reads_noto_serif_names() {
         let n = read_faces_bytes(crate::fonts::NOTO_SERIF_REGULAR);
         assert_eq!(n[0].family, "Noto Serif");
-        assert!(read_faces_bytes(b"not a font").is_empty());
     }
 
     #[test]
