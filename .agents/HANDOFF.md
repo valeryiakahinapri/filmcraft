@@ -36,18 +36,39 @@ guidance.
 ## Quality gates that ran on this branch
 
 - `cargo fmt --all -- --check`, `cargo xtask layers`, `cargo metadata` (lock consistent).
-- `cargo check -p filmcraft-web --target wasm32-unknown-unknown` (whole web graph).
+- `cargo check -p filmcraft-web --target wasm32-unknown-unknown` (whole web graph, including the
+  `BridgeServices` confinement wrapper).
 - Native `cargo check` for engine, codecs, text, cli, ui-egui, export, gpu, cloud.
-- `cargo test -p filmcraft-cloud` (4 integration tests).
-- See `git log` and the review-fix commit for the rest; re-run gates for the crates you touch —
-  they are listed in AGENTS.md `## This repository`.
+- `cargo test -p filmcraft-cloud` (4 integration tests), `--lib` suites for ui-egui (377 passed,
+  1 ignored), codecs (188), engine (924; see the APV note below), text (57), gpu (55), cli.
+- `cargo clippy --all-targets -- -D warnings` for cloud, codecs, engine, text, xtask, gpu, cli,
+  ui-egui, web (native). The one fix needed: the layout-preset round-trip test's
+  `Default::default()` field reassignment (branch pushes do not run CI, so it had never fired).
+- The full Node `js-bridge.mjs` e2e against freshly bound debug WASM: CLI command parity, JSON
+  Lines run, limits (pumpJobs bounds, 10000-line/8 MiB script caps, 16 MiB params, 1024-file
+  import cap), path confinement rejections, busy-guard rejection and release, render, batch
+  import, media probes, PNG and H.264 exports through the `BridgeServices` wrapper, and the
+  project round-trip — all pass.
+
+Four review rounds ran over the whole branch diff (self review + delegated reviewers): rounds
+1-3 fixed ~35 findings across the bridge (concurrency, caps, IO-layer confinement), the engine
+stepped-export `offlineMedia` recording, the cloud server (upload admission/limits/timeouts/
+sweeps), the cloud client (manifest validation, response caps), UI (stale layout capture,
+translated menu label, keyboard test, wasm test gating), the build graph (xtask layers for
+filmcraft-cloud, native-only `threads` mirrors, Noto Serif gating), and packaging (Brotli
+pipeline, caching rules, docs). Round 4 approved the final state for merge.
 
 Still open, inherited from earlier sessions:
 
 - `export_tests::every_builtin_preset_exports_and_ffprobe_confirms` fails only where ffprobe
   lacks an APV decoder (this sandbox's FFmpeg 7.1.5 has none; the assertion sees `codec_name:
   null`). Environment-dependent, not a branch defect; everything else in the engine suite
-  passes.
+  passes. Similarly, cli's `workflows::phone_vfr_clip_extract_gain_title_to_h264_mp4` compares
+  frames against the local ffmpeg oracle and failed in this sandbox only (no native-path branch
+  code changed; likely the same ffmpeg-version class).
+- `file.projectManager` does host IO with raw `std::fs` instead of `Services` (pre-existing;
+  fails closed on wasm32, unreachable through the bridge) — follow-up: route it through
+  `Services` or disable it on wasm.
 - The browser smoke test (`apps/filmcraft-web/tests/smoke.mjs`, needs a browser via CDP) has not
   been rerun against a bundle rebuilt with `ui.layout.*`; the committed zip predates that feature.
 - WASM-target clippy still fails on the unchanged `drop(output)` in
