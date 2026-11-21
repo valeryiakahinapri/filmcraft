@@ -29,6 +29,18 @@ font on the web. Higher `-O3` post-optimization was not faster in a local H.264 
 Browsers remain single-threaded in this build, so software exports cannot use the native encoder
 thread pool.
 
+With Brotli quality 11 and a 16 MiB window (`lgwin 24`), the same 39,126,617-byte WASM compresses
+to 9,314,350 bytes (8.88 MiB) — the smallest measured HTTP transfer for this build, served as
+precompressed bytes with `Content-Encoding: br`. Quality 11 with Brotli's smaller default window
+(4 MiB) stays at 9,548,179 bytes, so the large window is what reaches 9.31 MB. The exact artifact is
+committed at
+[`packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](../packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br)
+(SHA-256 `8487a26883c3655f0cf561efdbdfd266ffd350d0afb028b29b192bd171a1327a`) so the precompressed
+build is preserved in git; it decompresses byte-for-byte back to the WASM inside
+`packaging/web/filmcraft-web-0.20.1.zip` (SHA-256
+`fd9051456d934eee007282e0676fa15f177d0c0d7c45a6c1c84767d5c452cc7c`). Serving notes for hosts are
+in [the web packaging README](../packaging/web/README.md).
+
 `--serve` is a tiny localhost-only static server that sends `Cross-Origin-Opener-Policy` /
 `Cross-Origin-Embedder-Policy`, so the page is cross-origin isolated like a production deployment
 should be. Any static server works (`python3 -m http.server -d target/web/dist 8765`); it must

@@ -28,6 +28,20 @@ forever. Only `index.html` needs revalidation.
 - **Compression:** turn on gzip or Brotli for `.wasm`, `.js` and `.html`. That takes the
   current WASM download from 39.13 MB to 14.52 MB with gzip. You can also precompress
   (`brotli -k *.wasm`) and let the server send `Content-Encoding: br`.
+- **Precompressed Brotli artifact (recommended).** The repository ships the q11-compressed
+  WASM at [`filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br):
+  **9,314,350 bytes** (8.88 MiB), the smallest measured HTTP transfer for this build, produced from
+  the WASM in `filmcraft-web-0.20.1.zip` (39,126,617 bytes, SHA-256
+  `fd9051456d934eee007282e0676fa15f177d0c0d7c45a6c1c84767d5c452cc7c`) with Brotli quality 11 and a
+  16 MiB window (`lgwin 24`; SHA-256 of the `.br` file:
+  `8487a26883c3655f0cf561efdbdfd266ffd350d0afb028b29b192bd171a1327a`, round-trip verified). To serve
+  it, publish `filmcraft_web_bg.wasm.br` next to `filmcraft_web_bg.wasm`, send
+  `Content-Encoding: br` + `Content-Type: application/wasm` for it, and use `brotli`-aware
+  negotiation (`Accept-Encoding: br` → the `.br` file; anything else → the raw `.wasm`). Hosts that
+  pick up sibling `.br` files automatically (Netlify, Cloudflare Pages with Brotli enabled) need no
+  extra rule; nginx can use `brotli_static on`. Apache needs `mod_brotli` or an explicit rewrite for
+  `.wasm.br`. Keep the raw `.wasm` published as the fallback for clients that do not send
+  `Accept-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the `.wasm` and `.js`
   files (their URLs carry the build hash), and `no-cache` on `index.html`. `index.html` must not
   be cached, or a browser can pair an old page with new files.
