@@ -39,7 +39,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@f0deed1e0abfc6a9f121d4b3e47cc8c786accc1b # v2.8.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: artifacts-macos-${{ matrix.target }}
       - name: Check out craft-fonts
@@ -118,7 +118,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@f0deed1e0abfc6a9f121d4b3e47cc8c786accc1b # v2.8.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: artifacts-web
       - name: binaryen (wasm-opt; without it the wasm is 49 MB instead of 39)
