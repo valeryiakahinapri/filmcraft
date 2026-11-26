@@ -208,7 +208,11 @@ impl FilmcraftApp {
             return false;
         }
         let Some(bodies) = ctx.data(|data| data.get_temp::<Vec<BodyAt>>(bodies_id())) else { return true };
-        let Some((_, _, timeline, _, _)) = bodies.iter().find(|(panel, rect, _, _, _)| *panel == PanelKind::Timeline && rect.contains(pos)) else {
+        // A native window's bodies are in that window's coordinates; only the main window's can
+        // hold a host-cursor position.
+        let Some((_, _, timeline, _, _)) =
+            bodies.iter().find(|(panel, rect, _, viewport, _)| *viewport == egui::ViewportId::ROOT && *panel == PanelKind::Timeline && rect.contains(pos))
+        else {
             return false;
         };
         let layers = ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>());

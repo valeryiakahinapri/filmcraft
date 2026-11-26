@@ -54,7 +54,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         // in the 30 pt square centered where Home sits natively; 2 pt wider than Home, so the
         // tabs after it keep the position Home leaves them at.
         let spot = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(30.0, 30.0));
-        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(spot));
+        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(spot).id_salt("web-menu"));
         crate::menus::web_menu(app, &mut mu);
         x = spot.max.x + 14.0;
     }

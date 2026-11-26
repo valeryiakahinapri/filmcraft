@@ -1658,6 +1658,7 @@ mod tests {
 
     /// #1500: like a native menu bar, while one menu is open hovering another title opens it.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn hovering_another_title_switches_the_open_menu() {
         use egui_kittest::{Harness, kittest::Queryable};
 
