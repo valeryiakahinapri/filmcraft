@@ -21,20 +21,13 @@ concurrency:
 
 jobs:
   macos-build:
-    name: macOS ${{ matrix.target }}
-    timeout-minutes: 180
-    # The arm64 macos-15 pool stopped provisioning runners on 26 Nov 2026 (four 15-minute queue
-    # windows, no assignment, while x64-label jobs got runners in seconds), so the aarch64 slice
-    # cross-compiles on the Intel pool instead; Rust builds either macOS target from either host.
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            runner: macos-15-large
-          - target: x86_64-apple-darwin
-            runner: macos-15
+    name: macOS (universal slices)
+    timeout-minutes: 240
+    # One job, not a matrix: on 26 Nov 2026 the arm64 macos-15 pool provisioned a runner for only
+    # one of two concurrent jobs — the other sat four 15-minute queue windows without assignment
+    # and was cancelled (and macos-15-large failed instantly as an unavailable label). A single
+    # job builds both slices sequentially; Rust cross-compiles either macOS target from either host.
+    runs-on: macos-15
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
@@ -45,10 +38,10 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.100.0
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: artifacts-macos-${{ matrix.target }}
+          key: artifacts-macos-both
       - name: Check out craft-fonts
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -60,14 +53,25 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: cargo build --release --locked -p filmcraft -p filmcraft-cli --features filmcraft/neural-voices --target ${{ matrix.target }}
-      - name: Upload the target's binaries
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked -p filmcraft -p filmcraft-cli --features filmcraft/neural-voices --target "$target"
+          done
+      - name: Upload the aarch64 binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: macos-bin-${{ matrix.target }}
+          name: macos-bin-aarch64-apple-darwin
           path: |
-            target/${{ matrix.target }}/release/filmcraft
-            target/${{ matrix.target }}/release/filmcraft-cli
+            target/aarch64-apple-darwin/release/filmcraft
+            target/aarch64-apple-darwin/release/filmcraft-cli
+          if-no-files-found: error
+      - name: Upload the x86_64 binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-bin-x86_64-apple-darwin
+          path: |
+            target/x86_64-apple-darwin/release/filmcraft
+            target/x86_64-apple-darwin/release/filmcraft-cli
           if-no-files-found: error
 
   macos-package:
