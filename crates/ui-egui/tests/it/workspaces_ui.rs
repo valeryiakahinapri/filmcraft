@@ -441,6 +441,7 @@ fn the_workflow_stages_switch_modes_and_workspaces() {
     d.frames(2);
     assert_eq!(d.app().ui.mode, Mode::Import);
     assert_eq!(d.workspace(), "Captions and Graphics", "Import does not touch the workspace");
+    d.snapshot("stages-import");
     d.click("header.stage.export");
     d.frames(2);
     assert_eq!(d.app().ui.mode, Mode::Export);
@@ -450,6 +451,7 @@ fn the_workflow_stages_switch_modes_and_workspaces() {
     d.frames(2);
     assert_eq!(d.app().ui.mode, Mode::Edit);
     assert_eq!(d.workspace(), "Editing");
+    d.snapshot("stages-edit");
 
     // a click on the stage in use does not reload the saved layout over the live one
     d.ok("ui.panel.close", json!({"panel": "Metadata"}));
