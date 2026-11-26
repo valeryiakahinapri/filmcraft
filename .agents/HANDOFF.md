@@ -95,9 +95,15 @@ Still open, inherited from earlier sessions:
 
 1. Recheck the branch and worktree; toolchains and `target/` output are ephemeral, artifacts are
    in git now.
-2. If a served bundle must include `ui.layout.*`, rebuild the zip and `.br` from HEAD and update
-   the sizes/SHA-256s in `packaging/web/README.md` and `docs/web.md`.
-3. Do not push to `main` until the repository quality gate is green (see AGENTS.md rule 3).
+2. The recovered bundle was rebuilt locally (wasm-opt -O2 + Brotli q11 lgwin 24) and its rounded
+   corners were verified visually: `FILMCRAFT_UI_SNAPSHOT_DIR` renders with Mesa's lavapipe
+   software Vulkan ICD (extracted from the distro .deb with `dpkg -x`, no sudo needed; set
+   `VK_ICD_FILENAMES` + `LD_LIBRARY_PATH`), and the focus-*.png snapshots show the arc-following
+   ring with no corner artifacts in both themes. The sandbox has no GPU otherwise.
+3. A fresh GHPAT is the single blocker left: push `main` (+ `copilot/wasm-export-performance`,
+   + tag `build-20261126-ffeb9837`), confirm Actions is enabled on the fork (the REST API with a
+   repo-scoped token can enable it), and the tag push runs `.github/workflows/artifacts.yml`,
+   which publishes the unsigned macOS universal DMG and the web bundle as a GitHub release.
 4. Keep the still-open earlier goal in mind: a genuinely hosted web app/cloud workspace demo. The
    cloud PoC is loopback-only and unauthenticated; it is not suitable for public exposure. Keep
    headless work distinct from desktop GUI work.
