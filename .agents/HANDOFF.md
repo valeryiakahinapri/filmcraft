@@ -72,8 +72,14 @@ fix them — the +23-commit upstream drift this fork has not taken is the first 
 
 ## Immediate seam for the next session
 
-1. Watch the `build-20261126-<sha>` workflow run: the DMG should pass now that the exec bit
-   is restored; the release job publishes DMG + web zip + `.wasm.br` + SHA-256SUMS.
+1. The release is published: `build-20261126-ef8a96fd` — FilmCraft 0.20.1, unsigned — with the
+   macOS universal DMG (ad-hoc signed, Kokoro voices, craft fonts), the CLI zip, the web zip,
+   the precompressed `filmcraft_web_bg.wasm.br` and `SHA-256SUMS.txt` (the web zip's checksum
+   re-verified after download). GitHub's macos-15 arm64 pool was flaky all afternoon — jobs sat
+   15-minute queue windows and were cancelled — so the workflow now builds both universal
+   slices in ONE job (Rust cross-compiles either target from either host), and the packaging
+   job may need "Re-run failed jobs" until a runner lands; macos-14 cancels instantly
+   (retired fleet), macos-13 queues forever, macos-15-large is not available to the account.
 2. The remaining red on `main` is the 16 pre-existing failures above; decide between the
    upstream rebase and fixing them forward.
 3. Keep the still-open earlier goal in mind: a genuinely hosted web app/cloud workspace demo.
