@@ -23,11 +23,18 @@ jobs:
   macos-build:
     name: macOS ${{ matrix.target }}
     timeout-minutes: 180
-    runs-on: macos-15
+    # The arm64 macos-15 pool stopped provisioning runners on 26 Nov 2026 (four 15-minute queue
+    # windows, no assignment, while x64-label jobs got runners in seconds), so the aarch64 slice
+    # cross-compiles on the Intel pool instead; Rust builds either macOS target from either host.
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15-large
+          - target: x86_64-apple-darwin
+            runner: macos-15
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
@@ -67,7 +74,8 @@ jobs:
     name: macOS universal package (unsigned)
     timeout-minutes: 30
     needs: macos-build
-    runs-on: macos-15
+    # Intel pool: the arm64 macos-15 pool was not provisioning runners (see macos-build).
+    runs-on: macos-15-large
     env:
       CARGO_TERM_COLOR: always
     steps:
