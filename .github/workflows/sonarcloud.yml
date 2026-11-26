@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   sonarcloud:
-    # Tracked at @main so org-wide CI improvements propagate without PR churn.
+    # SHA-pinned after the Nov 2026 shared-action breakage; move the pin forward deliberately.
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
     with:
       # Match the font revision used by the regular gate and release builds.

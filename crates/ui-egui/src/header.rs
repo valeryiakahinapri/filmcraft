@@ -50,15 +50,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     #[cfg(target_family = "wasm")]
     {
-        let menus = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(26.0, 26.0));
-        let mresp = ui.interact(menus, egui::Id::unique("hdr-menus"), Sense::click()).on_hover_text(tl!("Menus"));
-        app.auto.add("header.menus", menus, "Menus");
-        if mresp.hovered() {
-            p.rect_filled(menus, 4.0, t.hover);
-        }
-        icons::paint(&p, menus.shrink(5.0), Icon::Hamburger, if mresp.hovered() { t.text } else { t.text_dim });
-        menus_popup(app, &mresp);
-        x = menus.max.x + 16.0;
+        // The shared, styled, keyboard-accessible hamburger (see [`crate::menus::web_menu`])
+        // in the 30 pt square centered where Home sits natively; 2 pt wider than Home, so the
+        // tabs after it keep the position Home leaves them at.
+        let spot = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(30.0, 30.0));
+        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(spot));
+        crate::menus::web_menu(app, &mut mu);
+        x = spot.max.x + 14.0;
     }
     // Mode tabs (14 pt; active = primary text with a 2 pt underline under the label)
     for (m, label, shown) in [(Mode::Import, "Import", tl!("Import")), (Mode::Edit, "Edit", tl!("Edit")), (Mode::Export, "Export", tl!("Export"))] {
@@ -212,35 +210,6 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if area.response.clicked_elsewhere() && !(ws_resp.clicked() || wresp.clicked()) {
             ui.ctx().data_mut(|d| d.insert_temp(popup_id, false));
         }
-    }
-}
-
-/// The header's hamburger menu (web): the same menu bar, folded vertical. Every top-level menu
-/// opens its items to the side of its row, so nothing is more clicks away than in the bar it
-/// stands in for, and the items are the same [`crate::menus`] tree the bar draws.
-#[cfg(target_family = "wasm")]
-fn menus_popup(app: &mut FilmcraftApp, button: &egui::Response) {
-    let ctx = button.ctx.clone();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
-    let items = crate::menus::menu_items_with_focus(app, &ctx);
-    let labels = app.session.prefs.labels.clone();
-    let mut clicked = None;
-    egui::Popup::menu(button).show(|ui| {
-        ui.set_min_width(220.0);
-        for top in crate::menus::MENUS {
-            let mine: Vec<&crate::menus::MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
-            let r = ui.menu_button(app.ui.language.tr(top), |ui| {
-                ui.set_min_width(260.0);
-                if mine.is_empty() {
-                    ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
-                }
-                crate::menus::menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
-            });
-            app.auto.add(&format!("menu.{top}"), r.response.rect, top);
-        }
-    });
-    if let Some(id) = clicked {
-        let _ = crate::menus::invoke(app, &ctx, &id, serde_json::json!({}));
     }
 }
 

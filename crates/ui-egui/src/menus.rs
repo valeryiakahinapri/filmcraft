@@ -1247,16 +1247,19 @@ pub fn external_commands() -> Vec<filmcraft_engine::shortcuts::CommandInfo> {
     v
 }
 
-/// Draw the in-window menu bar.
+/// Draw the in-window menu bar (desktop platforms without a native OS menu bar; the web
+/// header's hamburger is [`web_menu`]).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
-    #[cfg(target_arch = "wasm32")]
-    web_menu_bar(app, ui);
-    #[cfg(not(target_arch = "wasm32"))]
     native_menu_bar(app, ui);
 }
 
+/// The header's hamburger button and its folded menu (web): the same menu tree the in-window
+/// bar draws, one `menu_button` per top-level menu opening its items beside its row. Drawn into
+/// `ui.max_rect()`, which the header sizes to the button that stands in Home's spot; the button
+/// carries an accessible label, so keyboard and screen-reader users reach the menus through it.
 #[cfg(any(target_arch = "wasm32", test))]
-fn web_menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
+pub(crate) fn web_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     use egui::{Color32, Stroke, vec2};
 
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
@@ -1681,7 +1684,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu_bar(app, ui), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu(app, ui), app);
         crate::theme::install(&harness.ctx, &harness.state().tokens);
         harness.run_steps(3);
 
@@ -1704,7 +1707,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu_bar(app, ui), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu(app, ui), app);
         crate::theme::install(&harness.ctx, &harness.state().tokens);
         harness.run_steps(3);
 

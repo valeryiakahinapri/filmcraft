@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   lint:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    # SHA-pinned after the Nov 2026 shared-action breakage (a moving @main broke every suite); move the pin forward deliberately, after checking the shared repo's own action pins.
     uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
 
   windows-install-policy:

@@ -22,7 +22,11 @@ pub fn area_id() -> egui::Id {
     egui::Id::unique("filmcraft-docking")
 }
 
-/// Where each panel body was drawn last frame, and on which layer.
+/// Where each panel body was drawn last frame: its rect and the layer it was painted on, the
+/// viewport that pass belonged to (a native floating window's bodies draw in that window's own
+/// pass, at its own coordinates), and the colour surrounding its group card — the dock
+/// background for a docked group, the floating background for a window's.
+pub(crate) type BodyAt = (PanelKind, Rect, egui::LayerId, egui::ViewportId, egui::Color32);
 fn bodies_id() -> egui::Id {
     area_id().with("bodies")
 }
@@ -203,8 +207,10 @@ impl FilmcraftApp {
         if !ctx.content_rect().contains(pos) {
             return false;
         }
-        let Some(bodies) = ctx.data(|data| data.get_temp::<Vec<(PanelKind, Rect, egui::LayerId)>>(bodies_id())) else { return true };
-        let Some((_, _, timeline)) = bodies.iter().find(|(panel, rect, _)| *panel == PanelKind::Timeline && rect.contains(pos)) else { return false };
+        let Some(bodies) = ctx.data(|data| data.get_temp::<Vec<BodyAt>>(bodies_id())) else { return true };
+        let Some((_, _, timeline, _, _)) = bodies.iter().find(|(panel, rect, _, _, _)| *panel == PanelKind::Timeline && rect.contains(pos)) else {
+            return false;
+        };
         let layers = ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>());
         let rank = |layer: &egui::LayerId| layers.iter().position(|other| other == layer);
         !self.ui.dock.floating.iter().any(|window| {
@@ -290,8 +296,11 @@ impl FilmcraftApp {
         // craft-ui frames every group square. Once it has all drawn, each group's card (its tab
         // strip plus the body below) gets its corners back: the square corners are masked to the
         // surrounding background and the outline and the focus ring follow the same arc, so the
-        // three always agree (#1075's after-the-body rule, one layer up).
-        paint_rounded_cards(&ctx, &bodies, style.tab_height, &t, self.ui.focused);
+        // three always agree (#1075's after-the-body rule, one layer up). Only this viewport's
+        // bodies are painted here: a native floating window's cards are rounded at the end of
+        // that window's own pass, in `window_drawn`, at its own coordinates.
+        let shown: Vec<BodyAt> = bodies.iter().filter(|(_, _, _, viewport, _)| *viewport == egui::ViewportId::ROOT).cloned().collect();
+        paint_rounded_cards(&ctx, &shown, style.tab_height, &t, self.ui.focused);
         ctx.data_mut(|data| data.insert_temp(bodies_id(), bodies));
         self.handle_forwarded_keys(&ctx, output.forwarded_events);
         self.window_files = output.window_files;
@@ -486,13 +495,14 @@ const CARD_RADIUS: f32 = 6.0;
 /// the corner masks stop at, so any finer only smooths the polyline both share.
 const ARC_STEPS: usize = 5;
 
-/// Rounds every group card drawn this frame: the square corners craft-ui framed are masked back
-/// to the surrounding background and the outline and the focused panel's ring follow the same
-/// arc. `strip` is the tab strip's height (the card is the strip plus the body below it); each
-/// body carries the layer it was painted on, so a floating group is rounded on its own layer,
-/// below the window chrome above it.
-fn paint_rounded_cards(ctx: &egui::Context, bodies: &[(PanelKind, Rect, egui::LayerId)], strip: f32, t: &Tokens, focused: PanelKind) {
-    for (panel, rect, layer) in bodies {
+/// Rounds every group card drawn in this viewport's pass: the square corners craft-ui framed
+/// are masked back to the colour surrounding the card and the outline and the focused panel's
+/// ring follow the same arc. `strip` is the tab strip's height (the card is the strip plus the
+/// body below it); each body carries the layer it was painted on and that surrounding colour,
+/// so a floating group is rounded on its own layer against the floating background, below the
+/// window chrome above it.
+fn paint_rounded_cards(ctx: &egui::Context, bodies: &[BodyAt], strip: f32, t: &Tokens, focused: PanelKind) {
+    for (panel, rect, layer, _viewport, surround) in bodies {
         let card = Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y - strip), rect.max);
         if !card.is_finite() || card.width() < 2.0 || card.height() < 2.0 {
             continue;
@@ -509,7 +519,7 @@ fn paint_rounded_cards(ctx: &egui::Context, bodies: &[(PanelKind, Rect, egui::La
         {
             let arc = quarter_arc(corner, ix, iy, radius);
             for pair in arc.windows(2) {
-                painter.add(egui::Shape::convex_polygon(vec![corner, pair[0], pair[1]], t.panel_bg, egui::Stroke::NONE));
+                painter.add(egui::Shape::convex_polygon(vec![corner, pair[0], pair[1]], *surround, egui::Stroke::NONE));
             }
         }
         // One outline for the card: the focus ring where craft-ui's own accent already points,
@@ -565,7 +575,7 @@ struct FilmContent<'a> {
     menu: Option<(PanelKind, egui::Pos2, egui::ViewportId)>,
     /// The viewport of the Timeline tab strip whose sequence tab menu was opened this pass.
     seq_menu_viewport: egui::ViewportId,
-    bodies: Vec<(PanelKind, Rect, egui::LayerId)>,
+    bodies: Vec<BodyAt>,
     /// Restore Workspace chosen in a tab's menu; it replaces the layout after the dock area is drawn.
     restore_workspace: bool,
 }
@@ -576,12 +586,18 @@ impl DockContent<PanelKind> for FilmContent<'_> {
         let frame = ui.max_rect();
         let inset = t.gap.min(frame.width().min(frame.height()).max(0.0) * 0.25).max(0.0);
         let rect = frame.shrink(inset);
-        let radius = t.radius.min(frame.width().min(frame.height()) * 0.5).max(0.0);
-        ui.painter().rect_filled(frame, radius, t.panel_bg);
-        self.bodies.push((*panel, frame, ui.layer_id()));
+        // Square: the card pass rounds the strip and the body together, and a radius here
+        // would leave a backing-coloured band inside the corners that pass does not reach.
+        ui.painter().rect_filled(frame, 0.0, t.panel_bg);
+        // What surrounds the card: the dock background for a docked group, the floating
+        // background for a window's — in-window floats draw on their own `Order::Middle`
+        // layer, and a native window's bodies draw in that viewport's own pass.
+        let viewport = ui.ctx().viewport_id();
+        let floating = viewport != egui::ViewportId::ROOT || ui.layer_id().order == egui::Order::Middle;
+        let surround = if floating { t.panel_bg } else { t.app_bg };
+        self.bodies.push((*panel, frame, ui.layer_id(), viewport, surround));
         // A panel in its own OS window draws in that window's coordinates: its automation
         // elements carry the window so they are not matched against main-window points.
-        let viewport = ui.ctx().viewport_id();
         self.app.auto.viewport = viewport;
         self.app.auto.add(&format!("panel.{}", panel.id()), frame, panel.title());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt(("panel", panel.id())));
@@ -601,10 +617,16 @@ impl DockContent<PanelKind> for FilmContent<'_> {
     }
 
     /// A native floating window drew its last body: its end-of-pass IME check, for the Program
-    /// monitor's text editor when it is there.
+    /// monitor's text editor when it is there, and its group cards' corners — the same pass
+    /// [`Self::dock_area`] runs for the main window's, run here because this window's bodies
+    /// drew in this viewport's own pass, at this window's coordinates.
     fn window_drawn(&mut self, ui: &mut egui::Ui) {
         panels::panel_menu_area(self.app, ui);
         self.app.finish_ime_window(ui.ctx());
+        let viewport = ui.ctx().viewport_id();
+        let mine: Vec<BodyAt> = self.bodies.iter().filter(|(_, _, _, at, _)| *at == viewport).cloned().collect();
+        let focused = self.app.ui.focused;
+        paint_rounded_cards(ui.ctx(), &mine, self.tokens.tab_h, &self.tokens, focused);
     }
 
     fn logical_label(&self, panel: &PanelKind) -> String {

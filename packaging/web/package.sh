@@ -47,9 +47,11 @@ if ! command -v brotli >/dev/null; then
   echo "note: brotli not found; the .wasm ships without a precompressed variant" >&2
 else
   (cd "$WORK/$NAME" && find . -name '*.wasm' -exec brotli -q 11 --lgwin=24 -k {} +)
+  # `wc -c` rather than `stat -c%s`: the package step also runs on macOS dev machines.
   for BR in "$WORK/$NAME"/*.wasm.br; do
+    [[ -e "$BR" ]] || continue
     RAW="${BR%.br}"
-    echo "brotli q11: $(basename "$RAW") $(stat -c%s "$RAW") -> $(stat -c%s "$BR") bytes"
+    echo "brotli q11: $(basename "$RAW") $(wc -c <"$RAW" | tr -d ' ') -> $(wc -c <"$BR" | tr -d ' ') bytes"
   done
 fi
 # Sample server configs (MIME type, caching, compression); harmless where unused.
