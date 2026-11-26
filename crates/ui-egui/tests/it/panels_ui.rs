@@ -640,14 +640,16 @@ fn scopes_of_colour_bars() {
 }
 
 /// #1075: child backgrounds must not cover the focus outline shared with Program. Check the
-/// rendered primitives, including Media Browser's parent group, in both requested themes.
+/// rendered primitives, including Media Browser's parent group, in both requested themes. The
+/// rounded card's ring is a stroked path; a square `rect_stroke` ring (the shape this used to
+/// be) counts too.
 #[test]
 fn focused_panel_outline_is_not_covered_by_child_backgrounds() {
-    fn rectangles<'a>(shape: &'a egui::Shape, clip: egui::Rect, out: &mut Vec<(&'a egui::epaint::RectShape, egui::Rect)>) {
+    /// Every shape in paint order, `Shape::Vec` flattened.
+    fn flatten<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
         match shape {
-            egui::Shape::Rect(rect) => out.push((rect, clip)),
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| rectangles(shape, clip, out)),
-            _ => {}
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten(shape, out)),
+            _ => out.push(shape),
         }
     }
     let mut d = Driver::demo();
@@ -658,28 +660,39 @@ fn focused_panel_outline_is_not_covered_by_child_backgrounds() {
             d.ok("ui.set", json!({"focused": panel}));
             d.frames(3);
             d.snapshot(&format!("focus-{theme}-{panel}"), None);
-            let mut rects = Vec::new();
+            let mut shapes = Vec::new();
             for shape in &d.harness.output().shapes {
-                rectangles(&shape.shape, shape.clip_rect, &mut rects);
+                flatten(&shape.shape, &mut shapes);
             }
             let focus = d.harness.state().tokens.focus;
-            let outlines: Vec<_> = rects
-                .iter()
-                .enumerate()
-                .filter(|(_, (r, _))| r.stroke.color == focus && r.stroke.width == 1.0 && r.rect.width() > 100.0 && r.rect.height() > 80.0)
-                .collect();
-            assert_eq!(outlines.len(), 1, "{theme} {panel}: one focus outline for the whole parent group");
-            let (at, (outline, _)) = outlines[0];
-            let bounds = outline.rect;
+            let mut found = Vec::new();
+            for (at, shape) in shapes.iter().enumerate() {
+                let bounds = match shape {
+                    egui::Shape::Rect(rect) if rect.stroke.width == 1.0 && rect.stroke.color == focus => Some(rect.rect),
+                    egui::Shape::Path(path)
+                        if path.stroke.width == 1.0 && matches!(path.stroke.color, egui::epaint::ColorMode::Solid(color) if color == focus) =>
+                    {
+                        Some(path.visual_bounding_rect())
+                    }
+                    _ => None,
+                };
+                if let Some(bounds) = bounds.filter(|b| b.width() > 100.0 && b.height() > 80.0) {
+                    found.push((at, bounds));
+                }
+            }
+            assert_eq!(found.len(), 1, "{theme} {panel}: one focus outline for the whole parent group");
+            let (at, bounds) = found[0];
             let strips = [
                 egui::Rect::from_min_max(bounds.min, egui::pos2(bounds.max.x, bounds.min.y + 1.0)),
                 egui::Rect::from_min_max(egui::pos2(bounds.min.x, bounds.max.y - 1.0), bounds.max),
                 egui::Rect::from_min_max(bounds.min, egui::pos2(bounds.min.x + 1.0, bounds.max.y)),
                 egui::Rect::from_min_max(egui::pos2(bounds.max.x - 1.0, bounds.min.y), bounds.max),
             ];
-            for (child, clip) in &rects[at + 1..] {
-                if child.fill.a() != 0 {
-                    let painted = child.rect.intersect(*clip);
+            for shape in &shapes[at + 1..] {
+                if let egui::Shape::Rect(child) = shape
+                    && child.fill.a() != 0
+                {
+                    let painted = child.rect;
                     assert!(
                         strips.iter().all(|edge| !edge.intersect(painted).is_positive()),
                         "{theme} {panel}: a later child background {painted:?} covers the focus outline {bounds:?}"

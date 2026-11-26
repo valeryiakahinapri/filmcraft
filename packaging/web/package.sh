@@ -36,15 +36,21 @@ WORK="$CARGO_TARGET_DIR/web-package"
 rm -rf "$WORK"
 mkdir -p "$WORK/$NAME"
 cp -R "$SITE/." "$WORK/$NAME/"
-# Precompress the WASM for hosts that serve sibling .br files directly (Netlify, Cloudflare Pages
-# with Brotli, nginx `brotli_static on`): quality 11 with the 16 MiB window reaches the smallest
-# measured HTTP transfer for this build. Skipped (with a note) when the CLI is absent.
-if command -v brotli >/dev/null; then
-  brotli -q 11 --lgwin 24 -k "$WORK/$NAME/filmcraft_web_bg.wasm"
-  echo "precompressed $NAME/filmcraft_web_bg.wasm.br:"
-  ls -lh "$WORK/$NAME/filmcraft_web_bg.wasm.br"
+# Precompress the wasm with Brotli at quality 11 and the 16 MiB window: the smallest measured
+# transfer for this build (see HOSTING.md). The flag takes its value with `=`: `--lgwin 24`
+# is a syntax error, not a window setting.
+if ! command -v brotli >/dev/null; then
+  if [[ -n "${CI:-}" ]]; then
+    echo "error: brotli not found; the release artifact needs the precompressed wasm" >&2
+    exit 1
+  fi
+  echo "note: brotli not found; the .wasm ships without a precompressed variant" >&2
 else
-  echo "note: brotli not found; the zip ships without a precompressed filmcraft_web_bg.wasm.br" >&2
+  (cd "$WORK/$NAME" && find . -name '*.wasm' -exec brotli -q 11 --lgwin=24 -k {} +)
+  for BR in "$WORK/$NAME"/*.wasm.br; do
+    RAW="${BR%.br}"
+    echo "brotli q11: $(basename "$RAW") $(stat -c%s "$RAW") -> $(stat -c%s "$BR") bytes"
+  done
 fi
 # Sample server configs (MIME type, caching, compression); harmless where unused.
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"

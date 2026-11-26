@@ -1352,7 +1352,7 @@ fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
 
 /// One menu level: items whose path ends here, and a submenu (at its first item's position) for
 /// each deeper path segment, recursively (e.g. Clip ▸ Video Options ▸ Time Interpolation).
-fn menu_level(
+pub(crate) fn menu_level(
     ui: &mut egui::Ui,
     items: &[&MenuItem],
     depth: usize,

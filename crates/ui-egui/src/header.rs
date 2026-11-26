@@ -1,7 +1,7 @@
 //! The header bar (Premiere 26 layout, 38 pt): Home and Import / Edit / Export on the left, the
 //! document title centred, the workspace name and quick actions on the right. On macOS the menus
-//! live in the native menu bar (set up by the app); the browser uses a hamburger menu beside the
-//! mode tabs, and other platforms keep the compact in-window menu bar.
+//! live in the native menu bar (set up by the app); on the desktop elsewhere a compact in-window
+//! menu bar follows the mode tabs; on the web a hamburger opens them.
 
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 
@@ -13,14 +13,10 @@ use crate::theme::Tokens;
 /// Height of the header bar. With `integrated_titlebar` it sits in the macOS title-bar strip.
 pub const HEIGHT: f32 = 38.0;
 
-fn menu_bounds(x: f32, header: Rect) -> Rect {
-    let (width, inset_y) = if cfg!(target_arch = "wasm32") { (36.0, 4.0) } else { (520.0, 7.0) };
-    Rect::from_min_max(pos2(x + 6.0, header.min.y + inset_y), pos2(x + width, header.max.y - inset_y))
-}
-
-/// Draws the header bar in `rect` and handles its clicks: Home, the mode tabs, the workspace name
-/// and its menu (the workspaces, then Reset to Saved Layout, Save Changes to this Workspace, Save as
-/// New Workspace… and Edit Workspaces…), Discord and the quick actions.
+/// Draws the header bar in `rect` and handles its clicks: Home (the hamburger that opens the
+/// menus on the web), the mode tabs, the workspace name and its menu (the workspaces, then Reset
+/// to Saved Layout, Save Changes to this Workspace, Save as New Workspace… and Edit
+/// Workspaces…) and the quick actions.
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().clone();
@@ -35,18 +31,35 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
     }
     let mut x = rect.min.x + if app.integrated_titlebar { 104.0 } else { 14.0 };
-    // Home
-    let home = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(26.0, 26.0));
-    let hresp = ui.interact(home, egui::Id::unique("hdr-home"), Sense::click()).on_hover_text(tl!("Home"));
-    app.auto.add("header.home", home, "Home");
-    if hresp.hovered() {
-        p.rect_filled(home, 4.0, t.hover);
+    // Home. On the web a hamburger stands in its place: the browser offers no native menu bar
+    // and the header has no room for an in-window one, so the menus fold into the button that
+    // kept Home's spot. The Home screen itself stays one click away as the Import mode tab.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let home = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(26.0, 26.0));
+        let hresp = ui.interact(home, egui::Id::unique("hdr-home"), Sense::click()).on_hover_text(tl!("Home"));
+        app.auto.add("header.home", home, "Home");
+        if hresp.hovered() {
+            p.rect_filled(home, 4.0, t.hover);
+        }
+        icons::paint(&p, home.shrink(5.0), Icon::Home, if hresp.hovered() { t.text } else { t.text_dim });
+        if hresp.clicked() {
+            app.ui.mode = Mode::Import;
+        }
+        x = home.max.x + 16.0;
     }
-    icons::paint(&p, home.shrink(5.0), Icon::Home, if hresp.hovered() { t.text } else { t.text_dim });
-    if hresp.clicked() {
-        app.ui.mode = Mode::Import;
+    #[cfg(target_family = "wasm")]
+    {
+        let menus = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(26.0, 26.0));
+        let mresp = ui.interact(menus, egui::Id::unique("hdr-menus"), Sense::click()).on_hover_text(tl!("Menus"));
+        app.auto.add("header.menus", menus, "Menus");
+        if mresp.hovered() {
+            p.rect_filled(menus, 4.0, t.hover);
+        }
+        icons::paint(&p, menus.shrink(5.0), Icon::Hamburger, if mresp.hovered() { t.text } else { t.text_dim });
+        menus_popup(app, &mresp);
+        x = menus.max.x + 16.0;
     }
-    x = home.max.x + 16.0;
     // Mode tabs (14 pt; active = primary text with a 2 pt underline under the label)
     for (m, label, shown) in [(Mode::Import, "Import", tl!("Import")), (Mode::Edit, "Edit", tl!("Edit")), (Mode::Export, "Export", tl!("Export"))] {
         let active = app.ui.mode == m;
@@ -65,11 +78,17 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         x += gw + 24.0;
     }
+    #[cfg(not(target_family = "wasm"))]
     let mut left_end = x;
-    // In-window menus when there is no native menu bar.
+    #[cfg(target_family = "wasm")]
+    let left_end = x;
+    // In-window menus when there is no native menu bar. On the web the hamburger carries them
+    // instead (see above): the strip it would need is the one the mode tabs and the centred
+    // document title already share.
+    #[cfg(not(target_family = "wasm"))]
     if app.ui.show_menu_bar {
-        let bounds = menu_bounds(x, rect);
-        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(bounds).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let menu_rect = Rect::from_min_max(pos2(x + 6.0, rect.min.y + 7.0), pos2(x + 520.0, rect.max.y - 7.0));
+        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(menu_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         mu.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
         mu.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
         mu.style_mut().visuals.override_text_color = Some(t.text_dim);
@@ -131,20 +150,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let wresp = ui.interact(wr, egui::Id::unique("hdr-ws-name"), Sense::click());
     app.auto.add("header.workspaceName", wr, &ws);
     p.galley_with_override_text_color(pos2(wr.min.x + 4.0, rect.center().y - wg.size().y / 2.0), wg, if wresp.hovered() { t.text } else { t.text_dim });
-    // Community: a labelled Discord button, always one click away.
+    // Document title, centred in the gap the menus and the workspace name leave. Localized menus
+    // and user titles can be wider than English, so use the actual gap.
     {
-        let label = "Discord";
-        let g = p.layout_no_wrap(label.to_string(), Tokens::ui(12.0), Color32::WHITE);
-        let w = g.size().x + 34.0;
-        let r = Rect::from_min_size(pos2(wr.min.x - w - 14.0, rect.center().y - 12.0), vec2(w, 24.0));
-        let resp = ui.interact(r, egui::Id::unique("hdr-discord"), Sense::click()).on_hover_text(tl!("Join the ArtCraft Discord (discord.gg/artcraft)"));
-        app.auto.add("header.discord", r, "Join the ArtCraft Discord");
-        ui.painter().rect_filled(r, 12.0, if resp.hovered() { t.accent_hover } else { t.accent });
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)), Icon::Chat, Color32::WHITE);
-        ui.painter().galley(pos2(r.min.x + 25.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
-        // Localized menus and user titles can be wider than English. Use the actual gap.
         let left = left_end + 12.0;
-        let right = r.min.x - 12.0;
+        let right = wr.min.x - 12.0;
         if right > left + 40.0 {
             let mut job = egui::text::LayoutJob::simple_singleline(title, Tokens::ui(14.0), t.tab_text_active);
             job.wrap.max_width = right - left;
@@ -157,10 +167,6 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 galley,
                 t.tab_text_active,
             );
-        }
-
-        if resp.clicked() {
-            crate::links::open(app, ui.ctx(), crate::links::DISCORD);
         }
     }
     let popup_id = egui::Id::unique("workspaces-popup");
@@ -206,6 +212,35 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if area.response.clicked_elsewhere() && !(ws_resp.clicked() || wresp.clicked()) {
             ui.ctx().data_mut(|d| d.insert_temp(popup_id, false));
         }
+    }
+}
+
+/// The header's hamburger menu (web): the same menu bar, folded vertical. Every top-level menu
+/// opens its items to the side of its row, so nothing is more clicks away than in the bar it
+/// stands in for, and the items are the same [`crate::menus`] tree the bar draws.
+#[cfg(target_family = "wasm")]
+fn menus_popup(app: &mut FilmcraftApp, button: &egui::Response) {
+    let ctx = button.ctx.clone();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
+    let items = crate::menus::menu_items_with_focus(app, &ctx);
+    let labels = app.session.prefs.labels.clone();
+    let mut clicked = None;
+    egui::Popup::menu(button).show(|ui| {
+        ui.set_min_width(220.0);
+        for top in crate::menus::MENUS {
+            let mine: Vec<&crate::menus::MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
+            let r = ui.menu_button(app.ui.language.tr(top), |ui| {
+                ui.set_min_width(260.0);
+                if mine.is_empty() {
+                    ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
+                }
+                crate::menus::menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
+            });
+            app.auto.add(&format!("menu.{top}"), r.response.rect, top);
+        }
+    });
+    if let Some(id) = clicked {
+        let _ = crate::menus::invoke(app, &ctx, &id, serde_json::json!({}));
     }
 }
 

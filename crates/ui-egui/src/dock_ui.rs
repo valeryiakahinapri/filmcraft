@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use craft_ui::docking::{
     Action, Divider, DockArea, DockCommand, DockContent, DockEvent, DockStyle, FloatSpace, Hit, Layout, Node, ResizeEdge, WindowKind, Workspace,
 };
-use egui::{Rect, Sense, Stroke, StrokeKind, vec2};
+use egui::{Rect, Sense, Stroke, vec2};
 use serde_json::{Value, json};
 
 use crate::dock::{self, LayoutExt as _, PanelKind, SeqAction, SeqTabs};
@@ -281,13 +281,18 @@ impl FilmcraftApp {
         };
         let output = area.show_content(&mut child, &layout, &style, &mut content);
         let FilmContent { seq_actions, mut menu, seq_menu_viewport, bodies, restore_workspace, .. } = content;
-        ctx.data_mut(|data| data.insert_temp(bodies_id(), bodies));
         if let Some(panel) = output.focused {
             self.ui.focused = panel;
             if panel == PanelKind::Timeline {
                 self.raise_program_for_timeline();
             }
         }
+        // craft-ui frames every group square. Once it has all drawn, each group's card (its tab
+        // strip plus the body below) gets its corners back: the square corners are masked to the
+        // surrounding background and the outline and the focus ring follow the same arc, so the
+        // three always agree (#1075's after-the-body rule, one layer up).
+        paint_rounded_cards(&ctx, &bodies, style.tab_height, &t, self.ui.focused);
+        ctx.data_mut(|data| data.insert_temp(bodies_id(), bodies));
         self.handle_forwarded_keys(&ctx, output.forwarded_events);
         self.window_files = output.window_files;
         if let Some(error) = output.error {
@@ -472,6 +477,80 @@ fn dock_style(ui: &egui::Ui, t: &Tokens) -> DockStyle {
     style
 }
 
+/// Corner radius of a docked panel's card: the tab strip and body craft-ui frames as one
+/// rectangle. At most half the card's narrower side, so a degenerately small group stays a plain
+/// rectangle instead of turning into a pill.
+const CARD_RADIUS: f32 = 6.0;
+
+/// Quarter-arc segments per rounded corner. The outline passes through the same sample points
+/// the corner masks stop at, so any finer only smooths the polyline both share.
+const ARC_STEPS: usize = 5;
+
+/// Rounds every group card drawn this frame: the square corners craft-ui framed are masked back
+/// to the surrounding background and the outline and the focused panel's ring follow the same
+/// arc. `strip` is the tab strip's height (the card is the strip plus the body below it); each
+/// body carries the layer it was painted on, so a floating group is rounded on its own layer,
+/// below the window chrome above it.
+fn paint_rounded_cards(ctx: &egui::Context, bodies: &[(PanelKind, Rect, egui::LayerId)], strip: f32, t: &Tokens, focused: PanelKind) {
+    for (panel, rect, layer) in bodies {
+        let card = Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y - strip), rect.max);
+        if !card.is_finite() || card.width() < 2.0 || card.height() < 2.0 {
+            continue;
+        }
+        let radius = CARD_RADIUS.min(card.width() * 0.5).min(card.height() * 0.5);
+        if radius < 1.0 {
+            continue;
+        }
+        let painter = ctx.layer_painter(*layer);
+        // The corner masks: what the square frame drew outside the rounded card — the group
+        // outline's corner and any content hugging it — goes back to the background.
+        for (corner, ix, iy) in
+            [(card.min, 1.0, 1.0), (egui::pos2(card.max.x, card.min.y), -1.0, 1.0), (card.max, -1.0, -1.0), (egui::pos2(card.min.x, card.max.y), 1.0, -1.0)]
+        {
+            let arc = quarter_arc(corner, ix, iy, radius);
+            for pair in arc.windows(2) {
+                painter.add(egui::Shape::convex_polygon(vec![corner, pair[0], pair[1]], t.panel_bg, egui::Stroke::NONE));
+            }
+        }
+        // One outline for the card: the focus ring where craft-ui's own accent already points,
+        // the separator colour everywhere else.
+        let stroke = Stroke::new(1.0, if *panel == focused { t.focus } else { t.separator });
+        painter.add(egui::Shape::closed_line(rounded_outline(card, radius), stroke));
+    }
+}
+
+/// `ARC_STEPS + 1` points along the quarter arc of `radius` at `corner`, whose inward
+/// direction is `(ix, iy)`: from the tangent point on the horizontal edge to the one on the
+/// vertical edge, bulging toward the corner.
+fn quarter_arc(corner: egui::Pos2, ix: f32, iy: f32, radius: f32) -> Vec<egui::Pos2> {
+    let center = corner + vec2(ix * radius, iy * radius);
+    let toward_horizontal = vec2(0.0, -iy);
+    let toward_vertical = vec2(-ix, 0.0);
+    (0..=ARC_STEPS)
+        .map(|step| {
+            let theta = step as f32 * std::f32::consts::FRAC_PI_2 / ARC_STEPS as f32;
+            let (sin, cos) = theta.sin_cos();
+            center + radius * (toward_horizontal * cos + toward_vertical * sin)
+        })
+        .collect()
+}
+
+/// The rounded card's outline, clockwise from the top edge's left end: straight sides joined by
+/// the corner arcs — the same arcs the corner masks are cut to.
+fn rounded_outline(card: Rect, radius: f32) -> Vec<egui::Pos2> {
+    let top_left = quarter_arc(card.min, 1.0, 1.0, radius);
+    let top_right = quarter_arc(egui::pos2(card.max.x, card.min.y), -1.0, 1.0, radius);
+    let bottom_right = quarter_arc(card.max, -1.0, -1.0, radius);
+    let bottom_left = quarter_arc(egui::pos2(card.min.x, card.max.y), 1.0, -1.0, radius);
+    let mut points = Vec::with_capacity(4 * (ARC_STEPS + 2));
+    points.push(top_left[0]);
+    points.extend_from_slice(&top_right);
+    points.extend(bottom_right.iter().rev());
+    points.extend_from_slice(&bottom_left);
+    points.extend(top_left.iter().rev());
+    points
+}
+
 /// FilmCraft's side of the dock area for one frame.
 struct FilmContent<'a> {
     app: &'a mut FilmcraftApp,
@@ -514,12 +593,11 @@ impl DockContent<PanelKind> for FilmContent<'_> {
             craft_ui::docking::route_app_drag(ui.ctx(), area_id());
         }
         self.app.auto.viewport = egui::ViewportId::ROOT;
-        // The body fills its frame; allocating it lets a floated panel take its full size.
+        // The body fills its frame; allocating it lets a floated panel take its full size. Its
+        // card outline and focus ring are drawn by [`paint_rounded_cards`] once the whole dock
+        // area has rendered, so they sit above the group frame craft-ui draws around the strip
+        // and the body together.
         ui.allocate_rect(ui.max_rect(), Sense::hover());
-        // Painted after the body so child backgrounds cannot hide the focus outline (#1075).
-        if self.app.ui.focused == *panel {
-            ui.painter().rect_stroke(frame, radius, Stroke::new(1.0, t.focus), StrokeKind::Inside);
-        }
     }
 
     /// A native floating window drew its last body: its end-of-pass IME check, for the Program
@@ -664,5 +742,53 @@ mod tests {
         let entries = [PanelKind::Properties, PanelKind::Program].map(|panel| StackEntry { panel, open: false, height: None }).to_vec();
         let accordion = Layout { root: Some(Node::Stack { entries }), floating: vec![] };
         assert_eq!(tab_group(&accordion, PanelKind::Program), None, "an accordion");
+    }
+
+    use super::{ARC_STEPS, quarter_arc, rounded_outline};
+    use egui::{Rect, vec2};
+
+    /// A quarter arc meets both edges of its corner and stays inside the card: every point lies
+    /// on the circle of `radius` around the inset centre, so the mask the arc cuts and the
+    /// outline that follows it cannot drift apart.
+    #[test]
+    fn quarter_arcs_hug_their_corner() {
+        let card = Rect::from_min_max(egui::pos2(100.0, 200.0), egui::pos2(500.0, 600.0));
+        let radius = 6.0;
+        for (corner, ix, iy) in
+            [(card.min, 1.0, 1.0), (egui::pos2(card.max.x, card.min.y), -1.0, 1.0), (card.max, -1.0, -1.0), (egui::pos2(card.min.x, card.max.y), 1.0, -1.0)]
+        {
+            let arc = quarter_arc(corner, ix, iy, radius);
+            assert_eq!(arc.len(), ARC_STEPS + 1);
+            let center = corner + vec2(ix * radius, iy * radius);
+            let inside = |p: egui::Pos2| p.x >= card.min.x && p.x <= card.max.x && p.y >= card.min.y && p.y <= card.max.y;
+            for point in &arc {
+                assert!(((*point - center).length() - radius).abs() < 0.01, "every sample sits on the circle");
+                assert!(inside(*point), "every sample stays inside the card");
+            }
+            // The tangent points: `radius` along each edge from the corner.
+            let first = arc[0] - corner;
+            assert!((first.x - ix * radius).abs() < 0.01 && first.y.abs() < 0.01, "the arc starts on the horizontal edge");
+            let last = arc[ARC_STEPS] - corner;
+            assert!(last.x.abs() < 0.01 && (last.y - iy * radius).abs() < 0.01, "the arc ends on the vertical edge");
+        }
+    }
+
+    /// The rounded outline is a closed loop that only turns inward: every point stays inside the
+    /// square card, and its straight edges keep the card's sides, so the outline never leaves
+    /// room for the square corners it replaces.
+    #[test]
+    fn rounded_outline_covers_the_card() {
+        let card = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 300.0));
+        let points = rounded_outline(card, 6.0);
+        assert!(points.len() >= 4 * (ARC_STEPS + 1), "four arcs plus the corners' joins");
+        assert_eq!(points.first(), points.last(), "the loop closes");
+        let inside = |p: egui::Pos2| p.x >= card.min.x && p.x <= card.max.x && p.y >= card.min.y && p.y <= card.max.y;
+        for point in &points {
+            assert!(inside(*point), "the outline stays inside the card");
+        }
+        // The top edge runs between the top corners' tangent points, inset by the radius.
+        let top: Vec<f32> = points.iter().filter(|p| (p.y - card.min.y).abs() < 0.01).map(|p| p.x).collect();
+        assert!(top.first().copied().unwrap() >= card.min.x + 6.0 - 0.01);
+        assert!(top.last().copied().unwrap() <= card.max.x - 6.0 + 0.01);
     }
 }

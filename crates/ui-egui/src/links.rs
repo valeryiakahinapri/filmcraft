@@ -1,4 +1,4 @@
-//! Community and project links (Help menu, About dialog, header Discord button, Home screen).
+//! Community and project links (Help menu, About dialog, Home screen).
 //!
 //! FilmCraft is part of the ArtCraft family: the community lives on the ArtCraft Discord, every
 //! app has a page on the ArtCraft website and a public GitHub repository.
@@ -136,8 +136,8 @@ mod tests {
 
     #[test]
     fn links_open_through_the_host_hook() {
-        // #642: on the desktop every link (Help menu, About, Discord button, Import screen) must
-        // reach the host's browser opener; `ctx.open_url` alone is a no-op natively.
+        // #642: on the desktop every link (Help menu, About, Import screen) must reach the
+        // host's browser opener; `ctx.open_url` alone is a no-op natively.
         use std::cell::RefCell;
         use std::rc::Rc;
         let opened: Rc<RefCell<Vec<String>>> = Rc::default();

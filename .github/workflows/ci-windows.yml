@@ -29,7 +29,7 @@ concurrency:
 jobs:
   windows-scope:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
-    uses: storytold/craft-common-actions/.github/workflows/changed-paths.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/changed-paths.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
     with:
       label: full-ci
       # The crates and files with `cfg(windows)` code or Windows-only behaviour, and what decides
@@ -60,7 +60,7 @@ jobs:
     needs: windows-scope
     if: needs.windows-scope.outputs.matched == 'true'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
     with:
       os: '["windows-latest"]'
       # Same craft-fonts commit as ci.yml and release.yml.

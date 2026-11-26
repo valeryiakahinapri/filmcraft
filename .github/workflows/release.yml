@@ -28,11 +28,14 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
   release:
     needs: credits
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
+    # SHA-pinned, not @main: the shared repo's rust-channel action (added 2026-11-20, PR #302)
+    # broke release jobs for two days on the ubuntu-22.04 runners (Python 3.10 has no tomllib)
+    # until the fallback landed (2026-11-22, PR #324). This rev is past that fix; move it
+    # forward deliberately, after checking the shared repo's release runs are green.
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
     with:
       dry-run: ${{ github.event_name == 'schedule' }}
       app-name: filmcraft
