@@ -84,6 +84,14 @@ impl Driver {
         self.frames(2);
     }
 
+    /// Hover the widget whose accessible label is `label`, as the pointer would; the menus open
+    /// their submenus on hover, as native menus do.
+    fn hover(&mut self, label: &str) {
+        use egui_kittest::kittest::Queryable;
+        self.harness.get_by_label(label).hover();
+        self.frames(3);
+    }
+
     /// Replace the text of the field `id`.
     fn retype(&mut self, id: &str, text: &str) {
         self.click(id);
@@ -474,7 +482,8 @@ fn the_workspaces_menu_saves_resets_and_opens_the_dialogs() {
     let open_window_workspaces = |d: &mut Driver| {
         d.click("header.menu");
         d.click("menu.Window");
-        d.frames(3);
+        // The Workspaces submenu opens on hover, as in a native menu.
+        d.hover("Workspaces");
     };
     open_window_workspaces(&mut d);
     d.snapshot("header-menu");

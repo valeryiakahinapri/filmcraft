@@ -1277,44 +1277,31 @@ pub(crate) fn menu_popover(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     app.auto.add("header.menu", response.rect, menu);
 
     let mut clicked: Option<String> = None;
-    egui::Popup::menu(&response).width(240.0).show(|ui| {
-        crate::theme::menu_style(ui.style_mut());
-        ui.set_min_width(240.0);
-        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-            let mut titles = Vec::with_capacity(MENUS.len());
-            for top in MENUS {
-                let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
-                let title = app.ui.language.tr(top);
-                let r = ui.menu_button(title, |ui| {
-                    ui.set_min_width(260.0);
-                    if mine.is_empty() {
-                        ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
-                    }
-                    menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
-                });
-                app.auto.add(&format!("menu.{top}"), r.response.rect, top);
-                titles.push(r.response);
-            }
-            switch_on_hover(ui.ctx(), &titles);
+    egui::Popup::menu(&response)
+        .width(240.0)
+        // The app's menu style (13 pt text, #130) rides the popup's default MenuConfig, so every
+        // submenu the titles open inherits it, as the in-window bar's MenuConfig once carried it.
+        .style(crate::theme::menu_style)
+        .show(|ui| {
+            crate::theme::menu_style(ui.style_mut());
+            ui.set_min_width(240.0);
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                for top in MENUS {
+                    let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
+                    let title = app.ui.language.tr(top);
+                    let r = ui.menu_button(title, |ui| {
+                        ui.set_min_width(260.0);
+                        if mine.is_empty() {
+                            ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
+                        }
+                        menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
+                    });
+                    app.auto.add(&format!("menu.{top}"), r.response.rect, top);
+                }
+            });
         });
-    });
     if let Some(id) = clicked {
         let _ = invoke(app, &ctx, &id, json!({}));
-    }
-}
-
-/// Like a native menu bar (Windows, macOS): while one top-level menu is open, hovering another
-/// top-level title opens that menu instead (#1500). egui's `menu_button` only switches on click.
-fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
-    let ids: Vec<egui::Id> = titles.iter().map(egui::Popup::default_response_id).collect();
-    let Some(open) = ids.iter().position(|id| egui::Popup::is_id_open(ctx, *id)) else { return };
-    // `hovered` is false where a popup covers the title (a tall submenu pushed up over the
-    // bar), so the pointer inside an open menu never switches it.
-    if let Some(i) = titles.iter().position(egui::Response::hovered)
-        && i != open
-    {
-        egui::Popup::open_id(ctx, ids[i]);
-        ctx.request_repaint();
     }
 }
 
@@ -1621,9 +1608,10 @@ mod tests {
         assert!(items.iter().any(|it| it.id == "file.save" && it.path == ["File"]));
     }
 
-    /// #1500: like a native menu bar, while one menu is open hovering another title opens it.
+    /// #1500: inside the popover the titles are submenu buttons, which egui's menu system opens
+    /// on hover and switches on hover, as a native menu does.
     #[test]
-    fn hovering_another_title_switches_the_open_menu() {
+    fn hovering_a_title_opens_its_menu_and_hovering_another_switches() {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
@@ -1631,23 +1619,16 @@ mod tests {
         // the app's fonts, which draw the macOS shortcut symbols (⇧⌘S) egui's default fonts lack
         crate::theme::install(&harness.ctx, &harness.state().tokens);
         harness.run_steps(3);
-        // Nothing open: hovering a title does not open it (the popover itself is not open yet).
         harness.get_by_label("Menu").click();
         harness.run_steps(3);
         assert!(harness.query_by_label("File").is_some(), "the popover opens its menu list");
         harness.get_by_label("Edit").hover();
         harness.run_steps(3);
-        assert!(
-            harness.query_by_label_contains("Save All").is_none() && harness.query_by_label_contains("Undo").is_none(),
-            "a hover opens nothing while no menu is open"
-        );
-        harness.get_by_label("File").click();
-        harness.run_steps(3);
-        assert!(harness.query_by_label_contains("Save All").is_some(), "File menu did not open");
-        harness.get_by_label("Edit").hover();
+        assert!(harness.query_by_label_contains("Undo").is_some(), "a hover opens the submenu, as in a native menu");
+        harness.get_by_label("File").hover();
         harness.run_steps(4);
-        assert!(harness.query_by_label_contains("Save All").is_none(), "File menu should close");
-        assert!(harness.query_by_label_contains("Undo").is_some(), "Edit menu should open on hover");
+        assert!(harness.query_by_label_contains("Undo").is_none(), "Edit's menu should close");
+        assert!(harness.query_by_label_contains("Save All").is_some(), "File's menu should open on hover");
     }
 
     #[test]

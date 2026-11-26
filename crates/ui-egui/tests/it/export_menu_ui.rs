@@ -161,6 +161,9 @@ fn marker_csv_menu_exports_sequence_review_notes() {
     let entry = menu.as_array().unwrap().iter().find(|i| i["id"] == "markers.exportCsv").unwrap();
     assert_eq!(entry["path"], json!(["Markers"]));
     assert_eq!(entry["enabled"], true);
+    // The menus fold into the header's hamburger: open it before the Markers menu.
+    d.ok("ui.click", json!({"id":"header.menu"}));
+    d.frames(3);
     d.ok("ui.click", json!({"id":"menu.Markers"}));
     d.frames(3);
     let elements = d.ok("ui.elements", json!({"prefix":"menu.markers.exportCsv"}));

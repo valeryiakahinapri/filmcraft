@@ -224,7 +224,7 @@ mod tests {
     fn workspace_name_uppercasing_is_turkish_aware() {
         crate::i18n::set_current(crate::i18n::Language::Tr);
         assert_eq!(crate::i18n::to_uppercase("Birleştirme"), "BİRLEŞTİRME");
-        assert_eq!(crate::i18n::to_uppercase("Altyazılar ve Grafikler"), "ALTYAZILAR VE GRAFİLER");
+        assert_eq!(crate::i18n::to_uppercase("Altyazılar ve Grafikler"), "ALTYAZILAR VE GRAFİKLER");
         crate::i18n::set_current(crate::i18n::Language::En);
         assert_eq!(crate::i18n::to_uppercase("Birleştirme"), "BIRLEŞTIRME");
     }
