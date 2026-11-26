@@ -22,23 +22,24 @@ cargo xtask web --serve 8765    # build, then serve dist on http://127.0.0.1:876
 
 The release build uses Rust's optimized profile (opt-level 3, thin LTO, one codegen unit). When
 Binaryen's `wasm-opt` is installed, `cargo xtask web` applies its `-O2` pass to the bound WASM as
-well. For the current codec set the optimized WASM is 39,126,617 bytes (39.13 MB; 14,516,260 bytes
-with gzip), down from 42,139,756 bytes in the previous build: 7.15% smaller raw and 7.57% smaller
-with gzip. This change uses WebGPU without eframe's WebGL backend and omits the optional Noto Serif
-font on the web. Higher `-O3` post-optimization was not faster in a local H.264 export comparison.
+well. For the current codec set the optimized WASM is 39,689,696 bytes (39.69 MB; 14,658,485 bytes
+with gzip). This build carries the layout-profile API (`ui.layout.*` / `filmcraft.exportLayout()`),
+the rounded dock cards and the web hamburger menu. It uses WebGPU without eframe's WebGL backend
+and omits the optional Noto Serif font on the web. Higher `-O3` post-optimization was not faster
+in a local H.264 export comparison.
 Browsers remain single-threaded in this build, so software exports cannot use the native encoder
 thread pool.
 
-With Brotli quality 11 and a 16 MiB window (`lgwin 24`), the same 39,126,617-byte WASM compresses
-to 9,314,350 bytes (8.88 MiB) — the smallest measured HTTP transfer for this build, served as
+With Brotli quality 11 and a 16 MiB window (`lgwin 24`), the same 39,689,696-byte WASM compresses
+to 9,389,752 bytes (8.95 MiB) — the smallest measured HTTP transfer for this build, served as
 precompressed bytes with `Content-Encoding: br`. Quality 11 with Brotli's smaller default window
-(4 MiB) stays at 9,548,179 bytes, so the large window is what reaches 9.31 MB. The exact artifact is
+(4 MiB) stays measurably larger, so the large window is what reaches the minimum. The exact artifact is
 committed at
 [`packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](../packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br)
-(SHA-256 `8487a26883c3655f0cf561efdbdfd266ffd350d0afb028b29b192bd171a1327a`) so the precompressed
+(SHA-256 `5ba94a8546362c5ef8d1c708bd9f1c8595a7af870bfeae5c5acbdee14b2f1fd2`) so the precompressed
 build is preserved in git; it decompresses byte-for-byte back to the WASM inside
 `packaging/web/filmcraft-web-0.20.1.zip` (SHA-256
-`fd9051456d934eee007282e0676fa15f177d0c0d7c45a6c1c84767d5c452cc7c`). Serving notes for hosts are
+`4ca52ab7cdb9aa0f485e04268bea5d40c2731d89b60960bbf9b0291763ec9b7c`). Serving notes for hosts are
 in [the web packaging README](../packaging/web/README.md).
 
 `--serve` is a tiny localhost-only static server that sends `Cross-Origin-Opener-Policy` /

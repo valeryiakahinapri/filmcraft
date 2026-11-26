@@ -55,20 +55,30 @@ The branch is `copilot/wasm-export-performance`, rebased onto `storytold/filmcra
 `valeryiakahinapri/filmcraft`. It carries, in order: the earlier bridge/cloud/UI work; the WASM
 encoder thread-pool exclusion (native keeps it via target-specific features); the WASM
 workflow/handoff docs; the cumulative UI/layout/menu/scrub/theme changes; the committed
-Brotli q11 precompressed artifact; and a round of review fixes over everything above (bridge
+Brotli q11 precompressed artifact; a round of review fixes over everything above (bridge
 operation serialization and path sandboxing, stepped-export `offlineMedia` recording, cloud
 server upload bounds, xtask layer registration for `filmcraft-cloud`, layout-capture staleness,
-and test coverage for limits/concurrency). Run `git log --oneline upstream/main..HEAD` for the
-current list; hashes in older notes are stale by design.
+and test coverage for limits/concurrency); the recovered UI-feedback round (Discord button
+removed, web hamburger in Home's spot via the shared `menus::web_menu`, rounded dock cards
+with per-viewport masking and focus ring, `--lgwin=24` brotli fix, craft-common-actions pinned
+to `88148a57`) with two further review rounds fixing a native-window painting blocker and the
+mask colour; and the refreshed web bundle built from that state. Run `git log --oneline
+upstream/main..HEAD` for the current list; hashes in older notes are stale by design.
 
 The optimized bundle is committed at
 [`packaging/web/filmcraft-web-0.20.1.zip`](../packaging/web/filmcraft-web-0.20.1.zip) (inner WASM
-39,126,617 bytes, 14,516,260 gzip) and the precompressed serving artifact at
+39,689,696 bytes, 14,658,485 gzip; the zip now also carries the `.br` inside) and the precompressed
+serving artifact at
 [`packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](../packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br)
-(9,314,350 bytes; the smallest measured HTTP transfer, served with `Content-Encoding: br`).
-**Known gap:** the zip was built before the `ui.layout.*` / `filmcraft.exportLayout()` feature
-landed; rebuild with `cargo xtask web` + `packaging/web/package.sh` if a served bundle must
-include it, then refresh the sizes/SHA-256s in the packaging README and `docs/web.md`.
+(9,389,752 bytes; the smallest measured HTTP transfer, served with `Content-Encoding: br`). This
+bundle includes the `ui.layout.*` / `filmcraft.exportLayout()` feature, the rounded dock cards,
+the web hamburger menu and the header without the Discord button — the previous zip predated all
+of those. The local sandbox's last `git push` failed: the fork's GHPAT was rejected (expired or
+rotated); the recovered commits live on the local `copilot/ui-feedback-recovery` branch until a
+fresh token is provided. The fork also carries `.github/workflows/artifacts.yml` (tag-triggered):
+it builds the unsigned macOS universal DMG (Kokoro voices, craft fonts, ad-hoc signed) plus the
+web bundle and publishes them as a GitHub release with the workflow's own token — no Apple
+certificate exists on the fork, so Gatekeeper needs an explicit first-launch open.
 
 The release pipeline applies Binaryen `-O2` after wasm-bindgen when available. The size reduction
 combines WebGPU-only dependencies and omission of optional Noto Serif in the browser; it is not a

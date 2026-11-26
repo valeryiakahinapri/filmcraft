@@ -7,8 +7,8 @@ static site in `filmcraft-web-<version>/`:
 |---|---|
 | `index.html` | The page. It loads everything through relative URLs. |
 | `filmcraft_web.js` | wasm-bindgen glue (generated, ES module) |
-| `filmcraft_web_bg.wasm` | The app, 39,126,617 bytes (39.13 MB) in the current optimized build, or 14,516,260 bytes (14.52 MB) with gzip |
-| `filmcraft_web_bg.wasm.br` | The same WASM precompressed at Brotli quality 11 (lgwin 24): 9,314,350 bytes. Emitted by `package.sh` when the `brotli` CLI is available, and committed separately under `packaging/web/filmcraft-web-0.20.1/` |
+| `filmcraft_web_bg.wasm` | The app, 39,689,696 bytes (39.69 MB) in the current optimized build, or 14,658,485 bytes (14.66 MB) with gzip |
+| `filmcraft_web_bg.wasm.br` | The same WASM precompressed at Brotli quality 11 (lgwin 24): 9,389,752 bytes. Emitted by `package.sh` when the `brotli` CLI is available (and carried inside the zip), and committed separately under `packaging/web/filmcraft-web-0.20.1/` |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
@@ -27,15 +27,15 @@ forever. Only `index.html` needs revalidation.
   any other type, and the app then loads slowly or not at all. Serve `.js` as `text/javascript`.
   Most hosts already do both. For nginx, check that `mime.types` has `application/wasm wasm;`.
 - **Compression:** turn on gzip or Brotli for `.wasm`, `.js` and `.html`. That takes the
-  current WASM download from 39.13 MB to 14.52 MB with gzip. You can also precompress
+  current WASM download from 39.69 MB to 14.66 MB with gzip. You can also precompress
   (`brotli -k *.wasm`) and let the server send `Content-Encoding: br`.
 - **Precompressed Brotli artifact (recommended).** The repository ships the q11-compressed
   WASM at [`filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br):
-  **9,314,350 bytes** (8.88 MiB), the smallest measured HTTP transfer for this build, produced from
-  the WASM in `filmcraft-web-0.20.1.zip` (39,126,617 bytes, SHA-256
-  `fd9051456d934eee007282e0676fa15f177d0c0d7c45a6c1c84767d5c452cc7c`) with Brotli quality 11 and a
+  **9,389,752 bytes** (8.95 MiB), the smallest measured HTTP transfer for this build, produced from
+  the WASM in `filmcraft-web-0.20.1.zip` (39,689,696 bytes, SHA-256
+  `4ca52ab7cdb9aa0f485e04268bea5d40c2731d89b60960bbf9b0291763ec9b7c`) with Brotli quality 11 and a
   16 MiB window (`lgwin 24`; SHA-256 of the `.br` file:
-  `8487a26883c3655f0cf561efdbdfd266ffd350d0afb028b29b192bd171a1327a`, round-trip verified). To serve
+  `5ba94a8546362c5ef8d1c708bd9f1c8595a7af870bfeae5c5acbdee14b2f1fd2`, round-trip verified). To serve
   it, publish `filmcraft_web_bg.wasm.br` next to `filmcraft_web_bg.wasm`, send
   `Content-Encoding: br` + `Content-Type: application/wasm` for it, and use `brotli`-aware
   negotiation (`Accept-Encoding: br` → the `.br` file; anything else → the raw `.wasm`). Hosts that

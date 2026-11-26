@@ -9,24 +9,38 @@ guidance.
 ## Published state
 
 - The feature branch is `copilot/wasm-export-performance`, rebased onto `storytold/filmcraft`
-  `main` (upstream commits up to the slip-monitor merge are included) and pushed to
-  `valeryiakahinapri/filmcraft`. Run `git log --oneline upstream/main..HEAD` for the current
-  commit list; do not trust hashes recorded in notes.
-- The optimized distribution is committed at
+  `main` (upstream commits up to the slip-monitor merge are included). **The fork's GHPAT was
+  rejected on 26 Nov 2026 (`remote: Invalid username or token`; the REST API says `Bad
+  credentials`) — nothing since the 21 Nov review-fixes commit is pushed.** The recovery work
+  lives on the local branch `copilot/ui-feedback-recovery` (based on the pushed `main` tip) and
+  is merged into local `main` with tag `build-*` ready to push:
+  1. `098f6c8c` — the recovered UI-feedback round (see below).
+  2. `ac2d981a` — review fixes: a native floating window's corner masks painted into the ROOT
+     viewport at child-local coordinates (egui runs immediate-viewport callbacks re-entrantly
+     inside `show_content`, and `layer_painter` always targets the current viewport). Bodies
+     now record their viewport; `dock_area` paints only the ROOT pass's, `window_drawn` paints
+     the window's own at the end of its pass. The mask colour is per-body (`app_bg` docked,
+     `panel_bg` floating). The wasm hamburger is the one tested `menus::web_menu`.
+  3. `4134795d` — round-2 notes: `timeline_drop_target` skips native-window bodies, the
+     `menu_bar` kittest test is native-only, the web-menu child Ui has a stable id.
+  4. `f8236139` — `.github/workflows/artifacts.yml`: tag-triggered unsigned macOS universal +
+     web bundle + GitHub release (needs Actions enabled on the fork).
+  5. the refreshed artifacts commit — new zip + `.br` + docs (below). When a fresh token
+     arrives: `git push origin main && git push origin <build-tag>` (or the branch first).
+- The refreshed optimized distribution is committed at
   [`packaging/web/filmcraft-web-0.20.1.zip`](../packaging/web/filmcraft-web-0.20.1.zip)
-  (14,561,456 bytes; SHA-256 `2950dee0ad945ecc7e3bd060c27b00f2925fe86e8889c67f58e907d3753f298e`;
-  inner `filmcraft_web_bg.wasm` is 39,126,617 bytes, SHA-256
-  `fd9051456d934eee007282e0676fa15f177d0c0d7c45a6c1c84767d5c452cc7c`). **Known gap:** this bundle
-  was built before the `ui.layout.*` / `filmcraft.exportLayout()` feature landed, so it does not
-  contain the layout-profile API; rebuild with `cargo xtask web` +
-  `packaging/web/package.sh` before serving a bundle that must include it.
+  (24,124,589 bytes; SHA-256
+  `518953c12ee78eef09104a04c0e94731ee4a17f0cdf0487cb4061810bbeede39`;
+  inner `filmcraft_web_bg.wasm` is 39,689,696 bytes, SHA-256
+  `4ca52ab7cdb9aa0f485e04268bea5d40c2731d89b60960bbf9b0291763ec9b7c`), built from the recovered
+  branch state, so it now contains `ui.layout.*`, the rounded dock cards, the web hamburger
+  menu and the Discord-free header, and the zip also carries the `.br` inside.
 - The precompressed serving artifact is committed at
   [`packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br`](../packaging/web/filmcraft-web-0.20.1/filmcraft_web_bg.wasm.br):
-  9,314,350 bytes (Brotli quality 11, 16 MiB window / lgwin 24), SHA-256
-  `8487a26883c3655f0cf561efdbdfd266ffd350d0afb028b29b192bd171a1327a`, round-trip verified
+  9,389,752 bytes (Brotli quality 11, 16 MiB window / lgwin 24), SHA-256
+  `5ba94a8546362c5ef8d1c708bd9f1c8595a7af870bfeae5c5acbdee14b2f1fd2`, round-trip verified
   byte-for-byte against the zip's WASM. This is the smallest measured HTTP transfer for this
-  build (servers send it with `Content-Encoding: br`). `packaging/web/package.sh` now emits the
-  `.br` when the `brotli` CLI is available.
+  build (servers send it with `Content-Encoding: br`).
 - A full review-vs-main pass ran over the branch (findings fixed in the "review fixes" commit):
   the bridge serializes operations and sandboxes paths, stepped wasm exports record
   `offlineMedia`, the cloud server bounds stalls/concurrency/uploads, the xtask layers gate
