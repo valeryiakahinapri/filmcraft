@@ -1,7 +1,9 @@
-//! The header bar (Premiere 26 layout, 38 pt): Home and Import / Edit / Export on the left, the
-//! document title centred, the workspace name and quick actions on the right. On macOS the menus
-//! live in the native menu bar (set up by the app); on the desktop elsewhere a compact in-window
-//! menu bar follows the mode tabs; on the web a hamburger opens them.
+//! The header bar (Premiere 26 layout, 38 pt): the menu popover's hamburger and the workflow
+//! stages on the left, the document title centred, and the quick actions on the right. The stages
+//! are the DaVinci Resolve-style page switch — Import, Assemble, Edit, Color, Audio, Overlay,
+//! Effects, Export — where the middle ones pick the Edit mode's workspace and Import / Export are
+//! their own modes. On macOS the menus also live in the native menu bar (set up by the app);
+//! everywhere the hamburger opens them as a popover.
 
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 
@@ -13,10 +15,47 @@ use crate::theme::Tokens;
 /// Height of the header bar. With `integrated_titlebar` it sits in the macOS title-bar strip.
 pub const HEIGHT: f32 = 38.0;
 
-/// Draws the header bar in `rect` and handles its clicks: Home (the hamburger that opens the
-/// menus on the web), the mode tabs, the workspace name and its menu (the workspaces, then Reset
-/// to Saved Layout, Save Changes to this Workspace, Save as New Workspace… and Edit
-/// Workspaces…) and the quick actions.
+/// A workflow stage: one step of the header's stage switch. The Edit-mode stages are the Edit
+/// screens with a workspace picked; Import and Export are their own modes.
+struct Stage {
+    /// The automation id suffix (`header.stage.<id>`).
+    id: &'static str,
+    /// The English name: the tooltip, the automation label.
+    label: &'static str,
+    icon: Icon,
+    /// The mode the stage switches to.
+    mode: Mode,
+    /// The workspace the Edit-mode stages switch to (their layout); `None` on Import / Export.
+    workspace: Option<&'static str>,
+}
+
+/// The workflow stages, in order: Import, then the rough cut (Assemble), the refine pass (Edit),
+/// then the passes that own a panel layout — Colour, Audio, Overlay (captions and graphics),
+/// Effects — and finally the delivery (Export).
+const STAGES: [Stage; 8] = [
+    Stage { id: "import", label: "Import", icon: Icon::Import, mode: Mode::Import, workspace: None },
+    Stage { id: "assemble", label: "Assemble", icon: Icon::Automate, mode: Mode::Edit, workspace: Some("Assembly") },
+    Stage { id: "edit", label: "Edit", icon: Icon::Sequence, mode: Mode::Edit, workspace: Some("Editing") },
+    Stage { id: "color", label: "Color", icon: Icon::ColorWheel, mode: Mode::Edit, workspace: Some("Color") },
+    Stage { id: "audio", label: "Audio", icon: Icon::Audio, mode: Mode::Edit, workspace: Some("Audio") },
+    Stage { id: "overlay", label: "Overlay", icon: Icon::Captions, mode: Mode::Edit, workspace: Some("Captions and Graphics") },
+    Stage { id: "effects", label: "Effects", icon: Icon::Fx, mode: Mode::Edit, workspace: Some("Effects") },
+    Stage { id: "export", label: "Export", icon: Icon::Export, mode: Mode::Export, workspace: None },
+];
+
+impl Stage {
+    /// The stage is the one in use: its mode is on and, for the Edit-mode stages, its workspace
+    /// (a workspace picked from the Window menu, or a user's own, leaves no stage lit).
+    fn is_active(&self, app: &FilmcraftApp) -> bool {
+        if app.ui.mode != self.mode {
+            return false;
+        }
+        self.workspace.is_none_or(|w| crate::dock::slug(&app.ui.workspace) == crate::dock::slug(w))
+    }
+}
+
+/// Draws the header bar in `rect` and handles its clicks: the hamburger that opens the menus, the
+/// workflow stage switch, and the quick actions.
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let p = ui.painter().clone();
@@ -31,71 +70,46 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
     }
     let mut x = rect.min.x + if app.integrated_titlebar { 104.0 } else { 14.0 };
-    // Home. On the web a hamburger stands in its place: the browser offers no native menu bar
-    // and the header has no room for an in-window one, so the menus fold into the button that
-    // kept Home's spot. The Home screen itself stays one click away as the Import mode tab.
-    #[cfg(not(target_family = "wasm"))]
+    // The hamburger: the menus fold into the button at Home's old spot (the shared, styled,
+    // keyboard-accessible popover; see [`crate::menus::menu_popover`]). The Home screen itself is
+    // the Import stage next to it.
     {
-        let home = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(26.0, 26.0));
-        let hresp = ui.interact(home, egui::Id::unique("hdr-home"), Sense::click()).on_hover_text(tl!("Home"));
-        app.auto.add("header.home", home, "Home");
-        if hresp.hovered() {
-            p.rect_filled(home, 4.0, t.hover);
-        }
-        icons::paint(&p, home.shrink(5.0), Icon::Home, if hresp.hovered() { t.text } else { t.text_dim });
-        if hresp.clicked() {
-            app.ui.mode = Mode::Import;
-        }
-        x = home.max.x + 16.0;
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        // The shared, styled, keyboard-accessible hamburger (see [`crate::menus::web_menu`])
-        // in the 30 pt square centered where Home sits natively; 2 pt wider than Home, so the
-        // tabs after it keep the position Home leaves them at.
         let spot = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(30.0, 30.0));
-        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(spot).id_salt("web-menu"));
-        crate::menus::web_menu(app, &mut mu);
-        x = spot.max.x + 14.0;
+        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(spot).id_salt("menu-popover"));
+        crate::menus::menu_popover(app, &mut mu);
+        x = spot.max.x + 12.0;
     }
-    // Mode tabs (14 pt; active = primary text with a 2 pt underline under the label)
-    for (m, label, shown) in [(Mode::Import, "Import", tl!("Import")), (Mode::Edit, "Edit", tl!("Edit")), (Mode::Export, "Export", tl!("Export"))] {
-        let active = app.ui.mode == m;
-        let galley = p.layout_no_wrap(shown.to_string(), Tokens::ui(14.0), if active { t.tab_text_active } else { t.tab_text });
-        let r = Rect::from_min_size(pos2(x - 6.0, rect.min.y + 6.0), vec2(galley.size().x + 12.0, rect.height() - 12.0));
-        let resp = ui.interact(r, egui::Id::unique(("mode", label)), Sense::click());
-        app.auto.add(&format!("header.mode.{}", label.to_ascii_lowercase()), r, label);
+    // Workflow stages (26 pt icon buttons; active = primary icon with a 2 pt underline, the
+    // language the text tabs used)
+    for st in &STAGES {
+        let r = Rect::from_center_size(pos2(x + 13.0, rect.center().y), vec2(26.0, 26.0));
+        let resp = ui.interact(r, egui::Id::unique(("header.stage", st.id)), Sense::click()).on_hover_text(crate::i18n::t(st.label));
+        app.auto.add(&format!("header.stage.{}", st.id), r, st.label);
+        let active = st.is_active(app);
+        if resp.hovered() {
+            p.rect_filled(r, 4.0, t.hover);
+        }
         let col = if active || resp.hovered() { t.tab_text_active } else { t.tab_text };
-        let gw = galley.size().x;
-        p.galley_with_override_text_color(pos2(x, rect.center().y - galley.size().y / 2.0), galley, col);
+        icons::paint(&p, r.shrink(5.0), st.icon, col);
         if active {
-            p.line_segment([pos2(x, rect.min.y + 29.0), pos2(x + gw, rect.min.y + 29.0)], Stroke::new(2.0, t.tab_text_active));
+            p.line_segment([pos2(r.min.x + 3.0, r.max.y + 2.0), pos2(r.max.x - 3.0, r.max.y + 2.0)], Stroke::new(2.0, t.tab_text_active));
         }
         if resp.clicked() {
-            app.ui.mode = m;
+            app.ui.mode = st.mode;
+            // Only a different workspace reloads its layout: clicking the stage in use keeps the
+            // panels as they are (and so does coming back from Import / Export).
+            if let Some(w) = st.workspace
+                && crate::dock::slug(&app.ui.workspace) != crate::dock::slug(w)
+            {
+                app.set_workspace(w);
+            }
         }
-        x += gw + 24.0;
+        x = r.max.x + 6.0;
     }
-    #[cfg(not(target_family = "wasm"))]
-    let mut left_end = x;
-    #[cfg(target_family = "wasm")]
-    let left_end = x;
-    // In-window menus when there is no native menu bar. On the web the hamburger carries them
-    // instead (see above): the strip it would need is the one the mode tabs and the centred
-    // document title already share.
-    #[cfg(not(target_family = "wasm"))]
-    if app.ui.show_menu_bar {
-        let menu_rect = Rect::from_min_max(pos2(x + 6.0, rect.min.y + 7.0), pos2(x + 520.0, rect.max.y - 7.0));
-        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(menu_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        mu.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        mu.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
-        mu.style_mut().visuals.override_text_color = Some(t.text_dim);
-        crate::menus::menu_bar(app, &mut mu);
-        left_end = mu.min_rect().max.x;
-    }
+    let left_end = x - 6.0;
     // Document title, centred
     let title = if app.session.is_dirty() { tlf!("{name} - Edited", name = app.session.project.name) } else { app.session.project.name.clone() };
-    // Right cluster: icons at ~38 pt pitch, then workspace name in caps.
+    // Right cluster: icons at ~38 pt pitch.
     let mut rx = rect.max.x - 14.0;
     let mut btn = |ui: &mut egui::Ui, icon: Icon, id: &str, tip: &str, app: &mut FilmcraftApp| -> egui::Response {
         let r = Rect::from_center_size(pos2(rx - 14.0, rect.center().y), vec2(28.0, 28.0));
@@ -140,19 +154,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     if appearance.clicked() {
         crate::panels::settings::cycle_appearance(app, ui.ctx());
     }
-    let ws_resp = btn(ui, Icon::Workspaces, "workspaces", tl!("Workspaces"), app);
-    // workspace name (caps)
-    let ws = crate::i18n::to_uppercase(crate::i18n::t(&app.ui.workspace));
-    let wg = p.layout_no_wrap(ws.clone(), Tokens::ui(11.0), t.text_dim);
-    let wr = Rect::from_min_size(pos2(rx - wg.size().x + 10.0, rect.center().y - 10.0), vec2(wg.size().x + 8.0, 20.0));
-    let wresp = ui.interact(wr, egui::Id::unique("hdr-ws-name"), Sense::click());
-    app.auto.add("header.workspaceName", wr, &ws);
-    p.galley_with_override_text_color(pos2(wr.min.x + 4.0, rect.center().y - wg.size().y / 2.0), wg, if wresp.hovered() { t.text } else { t.text_dim });
-    // Document title, centred in the gap the menus and the workspace name leave. Localized menus
+    // Document title, centred in the gap the stages and the quick actions leave. Localized menus
     // and user titles can be wider than English, so use the actual gap.
     {
         let left = left_end + 12.0;
-        let right = wr.min.x - 12.0;
+        let right = appearance.rect.min.x - 12.0;
         if right > left + 40.0 {
             let mut job = egui::text::LayoutJob::simple_singleline(title, Tokens::ui(14.0), t.tab_text_active);
             job.wrap.max_width = right - left;
@@ -167,59 +173,58 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             );
         }
     }
-    let popup_id = egui::Id::unique("workspaces-popup");
-    if ws_resp.clicked() || wresp.clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(popup_id, true));
-    }
-    let open = ui.ctx().data(|d| d.get_temp::<bool>(popup_id).unwrap_or(false));
-    if open {
-        let anchor = pos2(wr.min.x, rect.max.y + 4.0);
-        let area = egui::Area::new(popup_id.with("area")).order(egui::Order::Foreground).fixed_pos(anchor).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                    ui.set_min_width(220.0);
-                    for w in crate::dock::names(&app.workspaces) {
-                        let sel = app.ui.workspace == w;
-                        if ui.selectable_label(sel, crate::i18n::t(&w)).clicked() {
-                            app.set_workspace(&w);
-                            ui.ctx().data_mut(|d| d.insert_temp(popup_id, false));
-                        }
-                    }
-                    ui.separator();
-                    // the actions of Window ▸ Workspaces, as in Premiere's workspace menu
-                    let actions = [
-                        ("reset", tl!("Reset to Saved Layout")),
-                        ("saveChanges", tl!("Save Changes to this Workspace")),
-                        ("saveAs", tl!("Save as New Workspace…")),
-                        ("edit", tl!("Edit Workspaces…")),
-                    ];
-                    for (action, label) in actions {
-                        let resp = ui.button(label);
-                        app.auto.add(&format!("header.workspaces.{action}"), resp.rect, label);
-                        if resp.clicked() {
-                            ui.ctx().data_mut(|d| d.insert_temp(popup_id, false));
-                            let ctx = ui.ctx().clone();
-                            if let Err(e) = crate::menus::invoke(app, &ctx, &format!("window.workspace.{action}"), serde_json::json!({})) {
-                                app.ui.status = e;
-                            }
-                        }
-                    }
-                });
-            });
-        });
-        if area.response.clicked_elsewhere() && !(ws_resp.clicked() || wresp.clicked()) {
-            ui.ctx().data_mut(|d| d.insert_temp(popup_id, false));
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The stages are ordered Import → Assemble → Edit → Color → Audio → Overlay → Effects →
+    /// Export, with the workspace-named ones between Import and Export.
+    #[test]
+    fn stages_are_ordered_and_mapped() {
+        let ids: Vec<&str> = STAGES.iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["import", "assemble", "edit", "color", "audio", "overlay", "effects", "export"]);
+        assert_eq!(STAGES[0].mode, Mode::Import);
+        assert_eq!(STAGES[7].mode, Mode::Export);
+        for st in &STAGES[1..7] {
+            assert_eq!(st.mode, Mode::Edit, "{} is an Edit-mode stage", st.id);
+            assert!(st.workspace.is_some(), "{} picks a workspace", st.id);
+        }
+        assert_eq!(STAGES[5].workspace, Some("Captions and Graphics"), "Overlay is Captions and Graphics");
+        assert_eq!(STAGES[1].workspace, Some("Assembly"), "Assemble is the Assembly layout");
+    }
+
+    /// The stage in use lights up: its mode and workspace, and only then; a workspace that is not
+    /// a stage's (picked from the Window menu, or the user's own) leaves the Edit stages unlit.
+    #[test]
+    fn the_active_stage_follows_the_mode_and_the_workspace() {
+        let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        app.ui.workspace = "Editing".into();
+        app.ui.mode = Mode::Edit;
+        assert!(STAGES[2].is_active(&app), "Edit with the Editing workspace");
+        assert!(!STAGES[1].is_active(&app), "Assemble is not lit on the Editing workspace");
+        app.ui.workspace = "Captions and Graphics".into();
+        assert!(STAGES[5].is_active(&app), "Overlay is Captions and Graphics");
+        assert!(!STAGES[2].is_active(&app));
+        app.ui.mode = Mode::Import;
+        assert!(STAGES[0].is_active(&app));
+        assert!(!STAGES[5].is_active(&app), "an Edit stage is not lit in Import mode");
+        app.ui.mode = Mode::Export;
+        assert!(STAGES[7].is_active(&app));
+        app.ui.mode = Mode::Edit;
+        app.ui.workspace = "Vertical".into();
+        assert!(!STAGES.iter().skip(1).take(6).any(|s| s.is_active(&app)), "no stage owns the Vertical workspace");
+        // the match is by slug, as the Window menu's ids are
+        app.ui.workspace = "captions andgraphics".into();
+        assert!(STAGES[5].is_active(&app), "the workspace match ignores spaces and case");
+    }
+
     #[test]
     fn workspace_name_uppercasing_is_turkish_aware() {
         crate::i18n::set_current(crate::i18n::Language::Tr);
         assert_eq!(crate::i18n::to_uppercase("Birleştirme"), "BİRLEŞTİRME");
-        assert_eq!(crate::i18n::to_uppercase("Altyazılar ve Grafikler"), "ALTYAZILAR VE GRAFİKLER");
+        assert_eq!(crate::i18n::to_uppercase("Altyazılar ve Grafikler"), "ALTYAZILAR VE GRAFİLER");
         crate::i18n::set_current(crate::i18n::Language::En);
         assert_eq!(crate::i18n::to_uppercase("Birleştirme"), "BIRLEŞTIRME");
     }

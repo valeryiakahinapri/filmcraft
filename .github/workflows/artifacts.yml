@@ -84,6 +84,9 @@ jobs:
           for t in aarch64-apple-darwin x86_64-apple-darwin; do
             mkdir -p "target/$t/release"
             cp "binaries/macos-bin-$t/filmcraft" "binaries/macos-bin-$t/filmcraft-cli" "target/$t/release/"
+            # upload/download-artifact does not preserve the executable bit; package.sh runs
+            # `filmcraft-cli --version` and the DMG scripts need both binaries executable.
+            chmod +x "target/$t/release/filmcraft" "target/$t/release/filmcraft-cli"
           done
       - name: Check out craft-fonts
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

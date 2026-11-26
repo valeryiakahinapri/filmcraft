@@ -208,7 +208,7 @@ fn home_recent_with_unsaved_changes_asks_first() {
     let (dir, current, other) = projects(&mut d, "homeRecent");
     let first = d.app().session.active_sequence().unwrap().video_tracks[0].items[0].clone();
     let clip = d.edit();
-    d.click("header.home");
+    d.click("header.stage.import");
     let i = d.recent(&other);
     d.click(&format!("import.recent.{i}"));
     assert_eq!(d.path(), Some(current.clone()), "nothing opens before an answer");
@@ -239,7 +239,7 @@ fn home_recent_save_on_a_never_saved_project_switches_to_edit_once_it_opens() {
     d.edit();
     let saved = dir.join("saved.fcproj").to_string_lossy().into_owned();
     d.app().hooks.pick_save = Some(Box::new(move |_| Some(saved.clone())));
-    d.click("header.home");
+    d.click("header.stage.import");
     let i = d.recent(&other);
     d.click(&format!("import.recent.{i}"));
     assert_eq!(d.app().ui.mode, Mode::Import);

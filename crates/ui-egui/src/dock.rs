@@ -229,6 +229,7 @@ pub struct LayoutPresetUi {
     pub essential_sound_tab: String,
     pub text_tab: String,
     pub show_scopes: bool,
+    /// Accepted and ignored: the menus live in the header's hamburger, not a strip under it.
     pub show_menu_bar: bool,
     pub show_header: bool,
     pub show_status_bar: bool,

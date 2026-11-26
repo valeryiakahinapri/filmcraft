@@ -1000,11 +1000,13 @@ fn big_timecodes_are_regular_weight_16pt_in_the_timecode_colour() {
     }
 }
 
-// Regression test for #130: the menu bar's menus were drawn in egui's default body size; Premiere's
-// are the system's, larger (13 pt) and brighter than panel text.
+// Regression test for #130: the menus (folded into the header's hamburger) were drawn in egui's
+// default body size; Premiere's are the system's, larger (13 pt) and brighter than panel text.
 #[test]
 fn menu_bar_menus_use_the_13pt_menu_text() {
     let mut d = Driver::demo();
+    d.click("header.menu");
+    d.frames(3);
     d.click("menu.File");
     d.frames(3);
     for id in ["menu.File", "menu.file.open", "menu.file.save", "menu.file.saveAs"] {

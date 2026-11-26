@@ -127,6 +127,8 @@ pub enum Icon {
     Moon,
     /// Colour parameters: pick a colour from the Program monitor (a pipette).
     Eyedropper,
+    /// A workflow stage: a colour wheel (a rim with three spokes, at 12, 4 and 8 o'clock).
+    ColorWheel,
 }
 
 pub struct Pen16<'a> {
@@ -792,6 +794,12 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.line(&[(9.5, 7.5), (3.5, 12.5)]);
             pen.line(&[(3.5, 12.5), (2.5, 13.5)]);
         }
+        ColorWheel => {
+            pen.circle(8.0, 8.0, 5.5);
+            pen.line(&[(8.0, 2.5), (8.0, 5.8)]);
+            pen.line(&[(12.76, 10.75), (9.91, 9.1)]);
+            pen.line(&[(3.24, 10.75), (6.09, 9.1)]);
+        }
     }
 }
 
@@ -928,6 +936,7 @@ mod tests {
         Network,
         Clock,
         Eyedropper,
+        ColorWheel,
     ];
 
     /// Paint `icon` at `ppp` device pixels per point into a rect of `size` points whose corner is

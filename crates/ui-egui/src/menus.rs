@@ -1247,19 +1247,12 @@ pub fn external_commands() -> Vec<filmcraft_engine::shortcuts::CommandInfo> {
     v
 }
 
-/// Draw the in-window menu bar (desktop platforms without a native OS menu bar; the web
-/// header's hamburger is [`web_menu`]).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
-    native_menu_bar(app, ui);
-}
-
-/// The header's hamburger button and its folded menu (web): the same menu tree the in-window
-/// bar draws, one `menu_button` per top-level menu opening its items beside its row. Drawn into
-/// `ui.max_rect()`, which the header sizes to the button that stands in Home's spot; the button
-/// carries an accessible label, so keyboard and screen-reader users reach the menus through it.
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn web_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
+/// The header's hamburger button and its folded menu: the whole menu tree, one `menu_button` per
+/// top-level menu opening its items beside its row. Drawn into `ui.max_rect()`, which the header
+/// sizes to the button at Home's old spot; the button carries an accessible label, so keyboard and
+/// screen-reader users reach the menus through it. On macOS the native menu bar carries the same
+/// tree besides it.
+pub(crate) fn menu_popover(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     use egui::{Color32, Stroke, vec2};
 
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
@@ -1288,6 +1281,7 @@ pub(crate) fn web_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
         crate::theme::menu_style(ui.style_mut());
         ui.set_min_width(240.0);
         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            let mut titles = Vec::with_capacity(MENUS.len());
             for top in MENUS {
                 let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
                 let title = app.ui.language.tr(top);
@@ -1299,7 +1293,9 @@ pub(crate) fn web_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
                     menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
                 });
                 app.auto.add(&format!("menu.{top}"), r.response.rect, top);
+                titles.push(r.response);
             }
+            switch_on_hover(ui.ctx(), &titles);
         });
     });
     if let Some(id) = clicked {
@@ -1307,39 +1303,8 @@ pub(crate) fn web_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn native_menu_bar(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
-    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("interface-language"), app.ui.language));
-    let items = menu_items_with_focus(app, ui.ctx());
-    // Draw Edit ▸ Label with the user's live palette, not the baked-in label colours.
-    let labels = app.session.prefs.labels.clone();
-    let ctx = ui.ctx().clone();
-    let mut clicked: Option<String> = None;
-    // The bar's titles and their menus share one size and colour, as in a native menu bar.
-    egui::MenuBar::new().style(crate::theme::menu_style).config(egui::containers::menu::MenuConfig::new().style(crate::theme::menu_style)).ui(ui, |ui| {
-        let mut titles = Vec::with_capacity(MENUS.len());
-        for top in MENUS {
-            let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
-            let r = ui.menu_button(app.ui.language.tr(top), |ui| {
-                ui.set_min_width(260.0);
-                if mine.is_empty() {
-                    ui.add_enabled(false, egui::Button::new(tl!("(empty)")));
-                }
-                menu_level(ui, &mine, 1, &mut clicked, &mut app.auto, &labels);
-            });
-            app.auto.add(&format!("menu.{top}"), r.response.rect, top);
-            titles.push(r.response);
-        }
-        switch_on_hover(ui.ctx(), &titles);
-    });
-    if let Some(id) = clicked {
-        let _ = invoke(app, &ctx, &id, json!({}));
-    }
-}
-
 /// Like a native menu bar (Windows, macOS): while one top-level menu is open, hovering another
-/// top-level title opens that menu instead (#1500). egui's `MenuBar` only switches on click.
-#[cfg(not(target_arch = "wasm32"))]
+/// top-level title opens that menu instead (#1500). egui's `menu_button` only switches on click.
 fn switch_on_hover(ctx: &egui::Context, titles: &[egui::Response]) {
     let ids: Vec<egui::Id> = titles.iter().map(egui::Popup::default_response_id).collect();
     let Some(open) = ids.iter().position(|id| egui::Popup::is_id_open(ctx, *id)) else { return };
@@ -1658,19 +1623,24 @@ mod tests {
 
     /// #1500: like a native menu bar, while one menu is open hovering another title opens it.
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn hovering_another_title_switches_the_open_menu() {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 700.0)).build_ui_state(|ui, app| menu_bar(app, ui), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 700.0)).build_ui_state(|ui, app| menu_popover(app, ui), app);
         // the app's fonts, which draw the macOS shortcut symbols (⇧⌘S) egui's default fonts lack
         crate::theme::install(&harness.ctx, &harness.state().tokens);
         harness.run_steps(3);
-        // Nothing open: hovering a title does not open it.
+        // Nothing open: hovering a title does not open it (the popover itself is not open yet).
+        harness.get_by_label("Menu").click();
+        harness.run_steps(3);
+        assert!(harness.query_by_label("File").is_some(), "the popover opens its menu list");
         harness.get_by_label("Edit").hover();
         harness.run_steps(3);
-        assert!(harness.query_by_label_contains("Save All").is_none() && harness.query_by_label_contains("Undo").is_none());
+        assert!(
+            harness.query_by_label_contains("Save All").is_none() && harness.query_by_label_contains("Undo").is_none(),
+            "a hover opens nothing while no menu is open"
+        );
         harness.get_by_label("File").click();
         harness.run_steps(3);
         assert!(harness.query_by_label_contains("Save All").is_some(), "File menu did not open");
@@ -1681,11 +1651,11 @@ mod tests {
     }
 
     #[test]
-    fn web_menu_opens_from_hamburger_and_cascades_vertically_then_horizontally() {
+    fn menu_popover_opens_from_the_hamburger_and_cascades_vertically_then_horizontally() {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu(app, ui), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| menu_popover(app, ui), app);
         crate::theme::install(&harness.ctx, &harness.state().tokens);
         harness.run_steps(3);
 
@@ -1704,11 +1674,11 @@ mod tests {
     }
 
     #[test]
-    fn web_menu_keyboard_open_submenu_and_escape_close() {
+    fn menu_popover_keyboard_open_submenu_and_escape_close() {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| web_menu(app, ui), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(700.0, 600.0)).build_ui_state(|ui, app| menu_popover(app, ui), app);
         crate::theme::install(&harness.ctx, &harness.state().tokens);
         harness.run_steps(3);
 

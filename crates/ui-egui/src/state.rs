@@ -480,8 +480,12 @@ pub struct UiState {
     /// share of the panel). Dragging the divider sets it (#643).
     #[serde(default)]
     pub effect_controls_split: f32,
+    /// Kept for saved layouts and the `ui.layout` control channel: the menus always fold into
+    /// the header's hamburger now, so the flag no longer adds the in-window menu strip it once
+    /// did (an incoming `true` is accepted and ignored).
     pub show_menu_bar: bool,
-    /// The header bar (Home, Import, Edit, Export, workspaces). An app that embeds FilmCraft can hide it.
+    /// The header bar (the hamburger, the workflow stages, the quick actions). An app that embeds
+    /// FilmCraft can hide it.
     #[serde(default = "shown")]
     pub show_header: bool,
     /// The status bar (hints, messages, job progress). An app that embeds FilmCraft can hide it.

@@ -408,39 +408,96 @@ fn save_rename_and_delete_through_the_dialogs() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
-/// The workspace menu in the header (the workspace's name at the top of the window) offers the
-/// actions of Window ▸ Workspaces under the list: Reset to Saved Layout, Save Changes to this
-/// Workspace, Save as New Workspace… and Edit Workspaces….
+/// The header's workflow stages: Import and Export are their own modes, the ones between them are
+/// the Edit mode with a workspace picked, and a click on the stage already in use keeps the live
+/// layout instead of reloading the saved one.
 #[test]
-fn the_header_workspace_menu_saves_resets_and_opens_the_dialogs() {
+fn the_workflow_stages_switch_modes_and_workspaces() {
+    use filmcraft_ui_egui::state::Mode;
+    let data = data_dir("stages");
+    let mut d = Driver::launch(&data);
+    assert_eq!(d.app().ui.mode, Mode::Edit, "the demo opens in Edit");
+    assert_eq!(d.workspace(), "Editing");
+
+    d.click("header.stage.assemble");
+    d.frames(2);
+    assert_eq!(d.app().ui.mode, Mode::Edit);
+    assert_eq!(d.workspace(), "Assembly", "Assemble is the Assembly layout");
+
+    d.click("header.stage.overlay");
+    d.frames(2);
+    assert_eq!(d.workspace(), "Captions and Graphics", "Overlay is Captions and Graphics");
+
+    // Import and Export are their own modes and leave the workspace alone
+    d.click("header.stage.import");
+    d.frames(2);
+    assert_eq!(d.app().ui.mode, Mode::Import);
+    assert_eq!(d.workspace(), "Captions and Graphics", "Import does not touch the workspace");
+    d.click("header.stage.export");
+    d.frames(2);
+    assert_eq!(d.app().ui.mode, Mode::Export);
+
+    // coming back to a middle stage restores Edit with its workspace
+    d.click("header.stage.edit");
+    d.frames(2);
+    assert_eq!(d.app().ui.mode, Mode::Edit);
+    assert_eq!(d.workspace(), "Editing");
+
+    // a click on the stage in use does not reload the saved layout over the live one
+    d.ok("ui.panel.close", json!({"panel": "Metadata"}));
+    d.frames(2);
+    assert!(!d.shows(PanelKind::Metadata));
+    d.click("header.stage.edit");
+    d.frames(2);
+    assert!(!d.shows(PanelKind::Metadata), "the stage in use keeps the live layout");
+    // but switching away and back brings the workspace's saved layout back
+    d.click("header.stage.color");
+    d.frames(2);
+    assert_eq!(d.workspace(), "Color");
+    d.click("header.stage.edit");
+    d.frames(2);
+    assert!(d.shows(PanelKind::Metadata), "switching away and back reloads the saved layout");
+    let _ = std::fs::remove_dir_all(&data);
+}
+
+/// The Window ▸ Workspaces menu (folded into the header's hamburger, alongside the workflow
+/// stages) offers the layout actions: Reset to Saved Layout, Save Changes to this Workspace, Save
+/// as New Workspace… and Edit Workspaces….
+#[test]
+fn the_workspaces_menu_saves_resets_and_opens_the_dialogs() {
     use filmcraft_ui_egui::state::WorkspaceDialog;
     let data = data_dir("header");
     let mut d = Driver::launch(&data);
     let ws = d.workspace();
     d.ok("ui.panel.close", json!({"panel": "Metadata"}));
 
-    d.click("header.workspaceName");
+    let open_window_workspaces = |d: &mut Driver| {
+        d.click("header.menu");
+        d.click("menu.Window");
+        d.frames(3);
+    };
+    open_window_workspaces(&mut d);
     d.snapshot("header-menu");
-    d.click("header.workspaces.saveChanges");
-    assert!(!d.has("header.workspaces.saveChanges"), "the menu closes");
+    d.click("menu.window.workspace.saveChanges");
+    assert!(!d.has("menu.window.workspace.saveChanges"), "the menu closes");
     assert_eq!(saved_file(&data)["saved"][0]["name"], json!(ws), "the layout is saved to the workspace in use");
 
     d.ok("ui.panel.show", json!({"panel": "Metadata"}));
     d.frames(2);
     assert!(d.shows(PanelKind::Metadata));
-    d.click("header.workspaceName");
-    d.click("header.workspaces.reset");
+    open_window_workspaces(&mut d);
+    d.click("menu.window.workspace.reset");
     assert!(!d.shows(PanelKind::Metadata), "Reset to Saved Layout brings back the saved layout");
     assert_eq!(d.workspace(), ws);
 
-    d.click("header.workspaceName");
-    d.click("header.workspaces.saveAs");
+    open_window_workspaces(&mut d);
+    d.click("menu.window.workspace.saveAs");
     assert!(matches!(d.app().ui.workspace_dialog, Some(WorkspaceDialog::SaveAs { .. })), "Save as New Workspace… asks for a name");
     d.click("workspaces.save.cancel");
     assert!(d.app().ui.workspace_dialog.is_none());
 
-    d.click("header.workspaceName");
-    d.click("header.workspaces.edit");
+    open_window_workspaces(&mut d);
+    d.click("menu.window.workspace.edit");
     assert!(matches!(d.app().ui.workspace_dialog, Some(WorkspaceDialog::Edit { .. })), "Edit Workspaces… opens its dialog");
     let _ = std::fs::remove_dir_all(&data);
 }
