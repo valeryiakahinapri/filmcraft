@@ -208,10 +208,12 @@ impl FilmcraftApp {
             return false;
         }
         let Some(bodies) = ctx.data(|data| data.get_temp::<Vec<BodyAt>>(bodies_id())) else { return true };
-        // A native window's bodies are in that window's coordinates; only the main window's can
-        // hold a host-cursor position.
+        // A native window's bodies are in that window's coordinates, so only the Timeline of the
+        // viewport this pass belongs to — the one the pointer position is in, as every caller is
+        // the Timeline's own UI or a `pending_timeline_drop` guarded by its viewport — can hold
+        // `pos`.
         let Some((_, _, timeline, _, _)) =
-            bodies.iter().find(|(panel, rect, _, viewport, _)| *viewport == egui::ViewportId::ROOT && *panel == PanelKind::Timeline && rect.contains(pos))
+            bodies.iter().find(|(panel, rect, _, viewport, _)| *viewport == ctx.viewport_id() && *panel == PanelKind::Timeline && rect.contains(pos))
         else {
             return false;
         };
