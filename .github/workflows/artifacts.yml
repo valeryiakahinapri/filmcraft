@@ -23,12 +23,12 @@ jobs:
   macos-build:
     name: macOS (universal slices)
     timeout-minutes: 240
-    # One job, not a matrix: on 26 Nov 2026 the arm64 macos-15 pool provisioned a runner for only
-    # one of two concurrent jobs — the other sat four 15-minute queue windows without assignment
-    # and was cancelled (and macos-15-large failed instantly as an unavailable label). macos-14's
-    # M1 fleet is the healthy pool; a single job builds both slices sequentially, the aarch64 one
-    # native, and Rust cross-compiles x86_64-apple-darwin from it.
-    runs-on: macos-14
+    # One job, not a matrix: on 26 Nov 2026 the arm64 macos-15 pool provisioned runners only
+    # intermittently (jobs sat up to 15 minutes in the queue and were cancelled; a probe showed
+    # the label does still get runners after a few minutes, while macos-14 cancelled instantly
+    # and macos-15-large is unavailable). A single job builds both slices sequentially — one
+    # runner request instead of two — and Rust cross-compiles either macOS target from either host.
+    runs-on: macos-15
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
@@ -79,8 +79,7 @@ jobs:
     name: macOS universal package (unsigned)
     timeout-minutes: 30
     needs: macos-build
-    # The same M1 pool as the build job; macos-15 was not provisioning runners (see macos-build).
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       CARGO_TERM_COLOR: always
     steps:
