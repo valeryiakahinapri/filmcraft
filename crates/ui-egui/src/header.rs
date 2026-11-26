@@ -34,7 +34,7 @@ struct Stage {
 /// Effects — and finally the delivery (Export).
 const STAGES: [Stage; 8] = [
     Stage { id: "import", label: "Import", icon: Icon::Import, mode: Mode::Import, workspace: None },
-    Stage { id: "assemble", label: "Assemble", icon: Icon::Automate, mode: Mode::Edit, workspace: Some("Assembly") },
+    Stage { id: "assemble", label: "Assemble", icon: Icon::Film, mode: Mode::Edit, workspace: Some("Assembly") },
     Stage { id: "edit", label: "Edit", icon: Icon::Sequence, mode: Mode::Edit, workspace: Some("Editing") },
     Stage { id: "color", label: "Color", icon: Icon::ColorWheel, mode: Mode::Edit, workspace: Some("Color") },
     Stage { id: "audio", label: "Audio", icon: Icon::Audio, mode: Mode::Edit, workspace: Some("Audio") },
